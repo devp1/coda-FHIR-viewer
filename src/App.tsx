@@ -9,21 +9,42 @@ import {
 import { buildFhirChart } from './lib/fhir-chart';
 import { FhirChartViewer } from './viewer/fhir-chart-viewer';
 
-// Minimal typings for the non-standard (but universally supported in Chromium/WebKit) directory-entry
-// API used to read a DROPPED FOLDER recursively. `dataTransfer.files` is empty for folder drops.
+// Reading a DROPPED FOLDER recursively (`dataTransfer.files` is empty for folder drops) has two APIs:
+//
+//  • PRIMARY — File System Access: `DataTransferItem.getAsFileSystemHandle()` returns a FileSystemHandle
+//    that is NOT bound to the drag data store, so it stays valid after the drop event yields. This is the
+//    correct, hang-proof path. Chromium/Edge only.
+//  • FALLBACK — legacy entries: `DataTransferItem.webkitGetAsEntry()` returns a FileSystemEntry whose
+//    reads (`readEntries`/`file`) are bound to the drag data store; once the drop handler yields, the
+//    store goes "protected" and a deferred read can invoke NEITHER callback → a bare Promise hangs
+//    forever ("Reading…"). Used only where the handle API is missing (Safari/Firefox), with a timeout so
+//    a stalled read fails loudly instead of hanging.
+
+// --- File System Access handles (primary) ---
+type FsFileHandle = { kind: 'file'; getFile: () => Promise<File> };
+type FsDirHandle = { kind: 'directory'; values: () => AsyncIterable<FsHandle> };
+type FsHandle = FsFileHandle | FsDirHandle;
+type ItemWithHandle = DataTransferItem & { getAsFileSystemHandle?: () => Promise<FsHandle | null> };
+
+/** Recursively collect every File under a dropped File System Access handle (handles survive the yield). */
+async function collectFilesFromHandle(handle: FsHandle): Promise<File[]> {
+  if (handle.kind === 'file') return [await handle.getFile()];
+  const out: File[] = [];
+  for await (const child of handle.values()) out.push(...(await collectFilesFromHandle(child)));
+  return out;
+}
+
+// --- Legacy directory entries (fallback) ---
 type FsFileEntry = FileSystemEntry & { file: (cb: (f: File) => void, err?: (e: unknown) => void) => void };
 type FsDirEntry = FileSystemEntry & {
   createReader: () => { readEntries: (cb: (entries: FileSystemEntry[]) => void, err?: (e: unknown) => void) => void };
 };
 
 /**
- * Wrap a legacy callback-style entry read in a Promise THAT CANNOT HANG FOREVER.
- *
- * Why this matters: after a `drop` event handler yields (the first `await`), the browser reverts the
- * drag data store to "protected mode". The `FileSystemEntry` handles captured during the event are then
- * invalidated, and a deferred `readEntries()`/`file()` call may invoke NEITHER its success nor its error
- * callback — a bare `new Promise` would stay pending forever, freezing the UI on "Reading…". Racing each
- * read against a timeout converts that silent hang into a catchable error the caller can surface.
+ * Wrap a legacy callback-style entry read in a Promise THAT CANNOT HANG FOREVER. On the fallback path the
+ * captured entry can be invalidated once the drop event yields, and the read may then invoke NEITHER its
+ * success nor its error callback — a bare `new Promise` would stay pending forever, freezing "Reading…".
+ * Racing each read against a timeout converts that silent hang into a catchable error the caller surfaces.
  */
 function entryRead<T>(run: (resolve: (v: T) => void, reject: (e: unknown) => void) => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -38,6 +59,25 @@ function entryRead<T>(run: (resolve: (v: T) => void, reject: (e: unknown) => voi
   });
 }
 
+/**
+ * Drain ONE directory fully in a single self-contained promise: `readEntries` returns ≤100 entries per
+ * call and must be re-invoked until it returns an empty batch. Re-arming inside the success callback (not
+ * behind an outer `await`) keeps the whole pagination within one continuation, the most resilient legacy
+ * shape against the protected-mode invalidation. Guarded by a timeout so a stalled read fails loudly.
+ */
+function readAllEntries(reader: ReturnType<FsDirEntry['createReader']>): Promise<FileSystemEntry[]> {
+  return entryRead<FileSystemEntry[]>((resolve, reject) => {
+    const all: FileSystemEntry[] = [];
+    const pump = () =>
+      reader.readEntries(batch => {
+        if (batch.length === 0) { resolve(all); return; }
+        all.push(...batch);
+        pump(); // re-arm immediately, no outer await between batches of the same reader.
+      }, reject);
+    pump();
+  });
+}
+
 /** Recursively walk dropped directory/file entries into a flat File[] (folder drop → all nested files). */
 async function collectFilesFromEntries(entries: FileSystemEntry[]): Promise<File[]> {
   const out: File[] = [];
@@ -48,13 +88,8 @@ async function collectFilesFromEntries(entries: FileSystemEntry[]): Promise<File
       return;
     }
     if (entry.isDirectory) {
-      const reader = (entry as FsDirEntry).createReader();
-      // readEntries returns at most ~100 entries per call — loop until it returns an empty batch.
-      for (;;) {
-        const batch = await entryRead<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
-        if (batch.length === 0) break;
-        for (const child of batch) await visit(child);
-      }
+      const children = await readAllEntries((entry as FsDirEntry).createReader());
+      for (const child of children) await visit(child);
     }
   };
   for (const entry of entries) await visit(entry);
@@ -125,23 +160,37 @@ export function FhirChartProofClient() {
       e.preventDefault();
       setDragOver(false);
 
-      // CAPTURE THE DRAG DATA STORE SYNCHRONOUSLY, BEFORE ANY `await`. After the drop handler yields,
-      // the browser reverts the drag data store to "protected mode" and these objects go invalid — so
-      // both the directory entries AND the plain file list must be read out now, while still live.
-      // A FOLDER drop puts nothing in `dataTransfer.files`; it arrives as DataTransferItems whose
-      // `webkitGetAsEntry()` is a directory to walk recursively. Plain FILE drops populate `.files`.
-      const entries = Array.from(e.dataTransfer.items)
+      // READ THE DRAG DATA STORE SYNCHRONOUSLY, BEFORE ANY `await`. Once the drop handler yields, the
+      // browser reverts the drag data store to "protected mode" and its items go invalid — so everything
+      // we need from `dataTransfer` must be PULLED OUT now, while it is still live:
+      //   • handlePromises — `getAsFileSystemHandle()` returns a Promise we kick off now; the resulting
+      //     handle is NOT bound to the drag store, so awaiting + recursing it later is safe (primary).
+      //   • entries        — legacy `webkitGetAsEntry()` directory entries (fallback, Safari/Firefox).
+      //   • plainFiles     — a plain multi-FILE drop populates `dataTransfer.files` directly.
+      const items = Array.from(e.dataTransfer.items);
+      const handlePromises = items.every(it => typeof (it as ItemWithHandle).getAsFileSystemHandle === 'function')
+        ? items.map(it => (it as ItemWithHandle).getAsFileSystemHandle!())
+        : null;
+      const entries = items
         .map(item => (typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null))
         .filter((entry): entry is FileSystemEntry => entry !== null);
       const plainFiles = Array.from(e.dataTransfer.files);
 
       // The whole drop is handled under ONE try/finally so the "Reading…" busy flag is ALWAYS cleared
-      // and any failure (a stalled/rejected folder read — see `entryRead`) surfaces as an error instead
-      // of an unhandled rejection that strands "Reading…" on screen forever.
+      // and any failure surfaces as an error instead of an unhandled rejection that strands "Reading…".
       setBusy(true);
       setError(null);
       try {
-        const files = entries.length > 0 ? await collectFilesFromEntries(entries) : plainFiles;
+        let files: File[];
+        if (handlePromises) {
+          // Primary: File System Access handles — survive the event yield, so no hang is possible.
+          const handles = (await Promise.all(handlePromises)).filter((h): h is FsHandle => h !== null);
+          files = (await Promise.all(handles.map(collectFilesFromHandle))).flat();
+        } else if (entries.length > 0) {
+          files = await collectFilesFromEntries(entries); // Fallback: legacy entries (timeout-guarded).
+        } else {
+          files = plainFiles;
+        }
         await loadFiles(files);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to read the dropped folder.');
