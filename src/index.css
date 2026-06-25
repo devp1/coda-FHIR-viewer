@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The viewer renders against the Coda off-white background; set it on the page so the standalone
+   matches the in-app surround. Fonts fall back to system stacks (Inter→system, EB Garamond→Georgia,
+   JetBrains Mono→ui-monospace) so the single HTML works fully offline with no bundled font files. */
+:root {
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-serif: Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #fbfbfa; /* bg token */
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Convenience utility classes the viewer references for the serif/mono runs (the in-app build maps
+   these to next/font variables; here they resolve to the system fallbacks above). */
+.serif {
+  font-family: var(--font-serif);
+}
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Trend-card entrance animation referenced by the modal/hover card — matches the in-app globals.css. */
+@keyframes coda-fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.coda-fade-in-up {
+  animation: coda-fade-in-up 0.22s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .coda-fade-in-up {
+    animation: none;
+  }
+}

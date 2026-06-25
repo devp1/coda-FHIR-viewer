@@ -1,0 +1,370 @@
+'use client';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FhirFlowsheet, FhirFlowsheetRow } from '../lib/fhir-chart';
+import {
+  measurementTrendPoints,
+  MeasurementTrendModal,
+  TrendSparkline,
+  FhirCellHover,
+  useHoverCard,
+  type FhirCellDetail,
+  type MeasurementTrend,
+  type MeasurementTrendPoint,
+} from './fhir-trend';
+import { FilterInput } from './fhir-primitives';
+import { computeColumnLayout, DATE_COL_FLOOR_PX } from './fhir-flowsheet-layout';
+
+/** Rows rendered outside the viewport buffer are virtualized away for performance. */
+const ROW_PX = 30;
+const OVERSCAN = 12;
+const NAME_COL = 'w-[16rem] min-w-[16rem] max-w-[16rem]';
+// The pure column-layout math (fill-then-scroll even-tiling invariant) lives in a separate module so it
+// can be unit-tested without React/DOM — see fhir-flowsheet-layout.ts + tests/fhir-viewer-flowsheet-layout.test.ts.
+/** Hard ceiling on rendered date columns so a huge window can't lock the browser (older off-screen). */
+const COLUMN_RENDER_CAP = 120;
+// Opaque frozen-name column with an inset divider — copied technique from the signed grid.
+const STICKY_FREEZE = 'sticky left-0 z-20 shadow-[inset_-1px_0_0_0_rgba(0,0,0,0.12)]';
+
+/** YYYY-MM-DD of a flowsheet column key (undated → ''). */
+function dayOf(dateKey: string): string {
+  return dateKey.startsWith('undated') ? '' : dateKey.slice(0, 10);
+}
+
+/**
+ * Full-width Labs / Vitals flowsheet — own dense matrix (fast, virtualized, searchable), with the
+ * REAL trend copied from the signed grid: hover a populated row → an inline sparkline in the name
+ * cell; click it → the real trend modal. NO reference ranges, NO High/Low (absent in FHIR exports).
+ *
+ * Columns = the COLUMN_CAP most-populated dates; rows with no value in those dates are hidden;
+ * analytes alphabetical. The trend is computed from the analyte's FULL history (every date), not the
+ * visible window.
+ */
+export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; noun: 'Lab result' | 'Vital' }) {
+  const [query, setQuery] = useState('');
+  const [trendKey, setTrendKey] = useState<string | null>(null);
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
+  // Per-cell hover detail card (value · unit · date · delta-vs-prior), ported from the signed grid.
+  const cellHover = useHoverCard<FhirCellDetail>();
+
+  // ── all populated dated columns (ascending, newest last), + the full data span ───────────────────
+  const allDated = useMemo(
+    () => flowsheet.dateKeys.filter(k => !k.startsWith('undated')).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    [flowsheet.dateKeys],
+  );
+  const spanStart = allDated.length ? dayOf(allDated[0]) : '';
+  const spanEnd = allDated.length ? dayOf(allDated[allDated.length - 1]) : '';
+
+  // ── from→to date window (user-set). Defaults to the full span. ──────────────────────────────────
+  const [from, setFrom] = useState(spanStart);
+  const [to, setTo] = useState(spanEnd);
+  // Re-seed the window when a different export loads (span changes).
+  const lastSpan = useRef('');
+  useEffect(() => {
+    const sig = `${spanStart}|${spanEnd}`;
+    if (sig !== lastSpan.current) { lastSpan.current = sig; setFrom(spanStart); setTo(spanEnd); }
+  }, [spanStart, spanEnd]);
+
+  // ── columns within the window — EVERY populated date in [from,to], scrolled horizontally. The most
+  // recent COLUMN_RENDER_CAP are rendered (newest on the right); older ones are reported off-screen
+  // (narrow the window to reach them). ──
+  const windowDates = useMemo(
+    () => allDated.filter(k => { const d = dayOf(k); return (!from || d >= from) && (!to || d <= to); }),
+    [allDated, from, to],
+  );
+  const visibleDates = windowDates.length > COLUMN_RENDER_CAP ? windowDates.slice(windowDates.length - COLUMN_RENDER_CAP) : windowDates;
+  const hiddenOlder = windowDates.length - visibleDates.length;
+
+  // Rows: alphabetical, present in ≥1 visible column, matching the search.
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return flowsheet.rows.filter(r => {
+      if (!visibleDates.some(k => r.cells[k] !== undefined)) return false;
+      if (q && !r.label.toLowerCase().includes(q) && !(r.unit ?? '').toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [flowsheet.rows, visibleDates, query]);
+
+  // ── trend rows (full history per analyte) for the inline sparkline + modal ──────────────────────
+  const trendByKey = useMemo(() => {
+    const map = new Map<string, MeasurementTrend>();
+    for (const row of flowsheet.rows) {
+      // Build day-resolution columns + cells (latest value per day) for THIS analyte's full history.
+      const dayCells = new Map<string, { valueText: string; value: number | null; fullKey: string }>();
+      for (const fullKey of Object.keys(row.cells)) {
+        const day = dayOf(fullKey);
+        if (!day) continue; // undated points can't plot on a time axis
+        const value = row.numeric.find(n => n.dateKey === fullKey)?.value ?? null;
+        const prev = dayCells.get(day);
+        if (!prev || fullKey > prev.fullKey) dayCells.set(day, { valueText: row.cells[fullKey], value, fullKey });
+      }
+      const days = [...dayCells.keys()].sort();
+      const columns = days.map(d => ({ dateKey: d, label: d }));
+      const cells = days.map(d => {
+        const c = dayCells.get(d)!;
+        return { value: c.value, valueText: c.valueText };
+      });
+      const points: MeasurementTrendPoint[] = measurementTrendPoints(cells, columns);
+      if (points.length >= 2) {
+        map.set(row.codeKey, { key: row.codeKey, label: row.label, unit: row.unit ?? '', points });
+      }
+    }
+    return map;
+  }, [flowsheet.rows]);
+
+  // ── virtualization + responsive frame width (for the fill-then-scroll column layout) ──────────────
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(600);
+  const [frameW, setFrameW] = useState(1000);
+  // Current exact column width (px), kept in a ref so the scroll-end handler can snap without re-binding.
+  const colPxRef = useRef(DATE_COL_FLOOR_PX);
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      setScrollTop(el.scrollTop);
+      // Whole-column snap: after horizontal scrolling settles (~120ms idle), round scrollLeft to the
+      // nearest multiple of colPx. Because colPx EVENLY DIVIDES the visible band freeWidth (the layout
+      // invariant — colPx = freeWidth/perView in scroll mode), a multiple-of-colPx scrollLeft lands a
+      // whole column at BOTH edges; and maxLeft = (real−perView)·colPx is itself a multiple of colPx, so
+      // the clamp preserves the whole-right far rest. Skip when there's nothing to scroll (fill mode).
+      if (snapTimer.current) clearTimeout(snapTimer.current);
+      snapTimer.current = setTimeout(() => {
+        const cp = colPxRef.current;
+        const maxLeft = el.scrollWidth - el.clientWidth;
+        if (cp <= 0 || maxLeft <= 0) return;
+        const snapped = Math.min(maxLeft, Math.round(el.scrollLeft / cp) * cp);
+        if (Math.abs(snapped - el.scrollLeft) > 0.5) el.scrollTo({ left: snapped, behavior: 'smooth' });
+      }, 120);
+    };
+    const ro = new ResizeObserver(() => { setViewportH(el.clientHeight); setFrameW(el.clientWidth); });
+    el.addEventListener('scroll', onScroll, { passive: true });
+    ro.observe(el);
+    setViewportH(el.clientHeight);
+    setFrameW(el.clientWidth);
+    return () => { el.removeEventListener('scroll', onScroll); ro.disconnect(); if (snapTimer.current) clearTimeout(snapTimer.current); };
+  }, []);
+  // Dynamic fill-then-scroll layout: when sparse the REAL date columns stretch to fill the whole frame
+  // (no whitespace, no filler); as dates are added they shrink evenly to the floor; past that, scroll.
+  const layout = useMemo(() => computeColumnLayout(frameW, visibleDates.length), [frameW, visibleDates.length]);
+  colPxRef.current = layout.colPx;
+  // Start scrolled to the RIGHT (newest dates) whenever the visible window changes.
+  const colCount = visibleDates.length;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [colCount, from, to]);
+  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_PX) - OVERSCAN);
+  const endIdx = Math.min(rows.length, Math.ceil((scrollTop + viewportH) / ROW_PX) + OVERSCAN);
+  const padTop = startIdx * ROW_PX;
+  const padBottom = (rows.length - endIdx) * ROW_PX;
+  const slice = rows.slice(startIdx, endIdx);
+
+  // trend modal navigation (prev/next over the trend-capable rows in display order)
+  const trendRows = useMemo(() => rows.filter(r => trendByKey.has(r.codeKey)), [rows, trendByKey]);
+  const trendIdx = trendKey ? trendRows.findIndex(r => r.codeKey === trendKey) : -1;
+  const activeTrend = trendKey ? trendByKey.get(trendKey) ?? null : null;
+
+  if (flowsheet.rows.length === 0) {
+    return <p className="text-sm text-ink-faint">No measurements.</p>;
+  }
+
+  return (
+    <div className="flex flex-col rounded-sm border border-hairline">
+      {/* header: count · date-window (from → to) · search (no duplicate title, no DRAWN) */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-hairline bg-surface-dim px-3 py-2">
+        <span className="mono text-[0.62rem] uppercase tracking-wider text-ink-faint">
+          {rows.length.toLocaleString()}
+          {rows.length !== flowsheet.rows.length ? ` of ${flowsheet.rows.length.toLocaleString()}` : ''} analytes ·{' '}
+          {windowDates.length.toLocaleString()} date{windowDates.length === 1 ? '' : 's'} in window
+          {hiddenOlder > 0 ? ` · ${hiddenOlder} oldest hidden — narrow the date window to view` : ''}
+        </span>
+        <div className="flex items-center gap-2">
+          <label className="mono flex items-center gap-1 text-[0.58rem] uppercase tracking-wider text-ink-faint">
+            from
+            <input
+              type="date"
+              value={from}
+              min={spanStart}
+              max={to || spanEnd}
+              onChange={e => setFrom(e.target.value)}
+              className="mono rounded-sm border border-hairline bg-surface px-1.5 py-0.5 text-[0.68rem] text-ink focus:border-ok focus:outline-none"
+            />
+          </label>
+          <label className="mono flex items-center gap-1 text-[0.58rem] uppercase tracking-wider text-ink-faint">
+            to
+            <input
+              type="date"
+              value={to}
+              min={from || spanStart}
+              max={spanEnd}
+              onChange={e => setTo(e.target.value)}
+              className="mono rounded-sm border border-hairline bg-surface px-1.5 py-0.5 text-[0.68rem] text-ink focus:border-ok focus:outline-none"
+            />
+          </label>
+          {(from !== spanStart || to !== spanEnd) && (
+            <button
+              type="button"
+              onClick={() => { setFrom(spanStart); setTo(spanEnd); }}
+              className="mono text-[0.58rem] uppercase tracking-wider text-ink-mid hover:text-ok"
+            >
+              reset
+            </button>
+          )}
+          <FilterInput value={query} onChange={setQuery} placeholder="Search analytes…" width="w-48" />
+        </div>
+      </div>
+
+      {/* Whole-column rest: on scroll-end, JS rounds scrollLeft to the nearest multiple of colPx. Because
+          colPx evenly divides the visible band freeWidth (the layout invariant), a multiple-of-colPx
+          scrollLeft shows whole columns at both edges. (CSS scroll-snap is unreliable here — the sticky
+          <thead> cells snap-align inconsistently — so this is done deterministically in the handler.) */}
+      {/* RC4: an empty visible window (a from→to sub-range with no populated dates) must NOT collapse the
+          table to a 256px name-col island floating in a full-frame void — render a full-width empty state. */}
+      {visibleDates.length === 0 ? (
+        <p className="px-3 py-8 text-center text-[0.8rem] text-ink-faint">
+          No measurements{from || to ? ` between ${from || '…'} and ${to || '…'}` : ''}.
+        </p>
+      ) : (
+      <div ref={scrollRef} className="max-h-[70vh] overflow-auto">
+        {/* Cell text 0.74rem — one EHR-grade cell size shared with ClinicalTable (E3). Row height
+            (ROW_PX virtualization) and the trend/date-window logic are unchanged. */}
+        {/* `table-fixed` + a <colgroup> of EXACT computed widths: layout is authoritative (not
+            content-driven, so it can't shift as virtualized rows mount/unmount) AND the table width is
+            the exact column sum — name col + N whole `freeWidth/N` columns. In FILL mode that equals the
+            frame (fills edge-to-edge, no void); in SCROLL mode it's wider by whole columns (wrapper
+            scrolls, every column lands whole — no clipped partial at the seam). */}
+        <table className="table-fixed border-collapse text-[0.74rem]" style={{ width: layout.tableWidth }}>
+          <colgroup>
+            <col className={NAME_COL} />
+            {visibleDates.map(dateKey => (
+              <col key={dateKey} style={{ width: layout.colWidth }} />
+            ))}
+          </colgroup>
+          <thead className="sticky top-0 z-30">
+            <tr className="border-b border-hairline-strong">
+              <th className={`${STICKY_FREEZE} ${NAME_COL} bg-surface-dim py-1.5 pl-3 pr-3 text-left align-bottom font-normal`}>
+                <span className="mono text-[0.6rem] uppercase tracking-wider text-ink-faint">{noun}</span>
+              </th>
+              {visibleDates.map(dateKey => (
+                <th key={dateKey} className="bg-surface-dim px-2 py-1.5 text-right align-bottom font-normal">
+                  <span className="mono whitespace-nowrap text-[0.62rem] text-ink-mid">{shortDate(dateKey)}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {padTop > 0 && <tr style={{ height: padTop }}><td colSpan={1 + visibleDates.length} /></tr>}
+            {slice.map((row, i) => {
+              const zebra = (startIdx + i) % 2 === 1;
+              const rowBg = zebra ? 'bg-[#FAFAF8]' : 'bg-surface';
+              const trend = trendByKey.get(row.codeKey);
+              const showSpark = trend && hoverKey === row.codeKey;
+              return (
+                <tr
+                  key={row.codeKey}
+                  className={`border-b border-hairline ${rowBg}`}
+                  style={{ height: ROW_PX }}
+                  onPointerEnter={() => setHoverKey(row.codeKey)}
+                  onPointerLeave={() => setHoverKey(cur => (cur === row.codeKey ? null : cur))}
+                >
+                  <th scope="row" className={`${STICKY_FREEZE} ${NAME_COL} ${rowBg} py-1 pl-3 pr-2 text-left align-middle font-normal`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-baseline gap-2">
+                        <span className="truncate text-ink" title={row.label}>{row.label}</span>
+                        {row.unit && <span className="mono shrink-0 text-[0.6rem] text-ink-faint">{row.unit}</span>}
+                      </span>
+                      {trend && (
+                        <button
+                          type="button"
+                          onClick={() => setTrendKey(row.codeKey)}
+                          aria-label={`Open ${row.label} trend`}
+                          title={`${row.label} — trend over time`}
+                          className={`shrink-0 rounded-sm transition-opacity ${showSpark ? 'opacity-100' : 'opacity-0'} hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none`}
+                        >
+                          <TrendSparkline points={trend.points} />
+                        </button>
+                      )}
+                    </div>
+                  </th>
+                  {visibleDates.map(dateKey => {
+                    const value = row.cells[dateKey];
+                    const populated = value !== undefined;
+                    return (
+                      <td
+                        key={dateKey}
+                        className={`truncate whitespace-nowrap px-2 py-1 text-right align-middle tabular-nums text-ink ${populated ? 'cursor-default' : ''}`}
+                        onPointerEnter={populated ? e => cellHover.scheduleOpen(buildCellDetail(row, dateKey, value), e.currentTarget.getBoundingClientRect()) : undefined}
+                        onPointerLeave={populated ? () => cellHover.scheduleClose() : undefined}
+                        onFocus={populated ? e => cellHover.openNow(buildCellDetail(row, dateKey, value), e.currentTarget.getBoundingClientRect()) : undefined}
+                        onBlur={populated ? () => cellHover.closeNow() : undefined}
+                        tabIndex={populated ? 0 : undefined}
+                      >
+                        {populated ? value : <span className="text-ink-faint/50">–</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+            {padBottom > 0 && <tr style={{ height: padBottom }}><td colSpan={1 + visibleDates.length} /></tr>}
+          </tbody>
+        </table>
+      </div>
+      )}
+
+      {cellHover.open && (
+        <FhirCellHover
+          detail={cellHover.open.payload}
+          anchor={cellHover.open.anchor}
+          cardRef={cellHover.cardRef}
+          onCardEnter={cellHover.onCardEnter}
+          onCardLeave={cellHover.onCardLeave}
+        />
+      )}
+
+      {activeTrend && (
+        <MeasurementTrendModal
+          trend={activeTrend}
+          switchNoun={noun === 'Vital' ? 'vital' : 'test'}
+          onClose={() => setTrendKey(null)}
+          onBlurClose={() => setTrendKey(null)}
+          onPrev={trendRows.length > 1 ? () => setTrendKey(trendRows[(trendIdx - 1 + trendRows.length) % trendRows.length].codeKey) : undefined}
+          onNext={trendRows.length > 1 ? () => setTrendKey(trendRows[(trendIdx + 1) % trendRows.length].codeKey) : undefined}
+          prevLabel={trendRows.length > 1 ? trendRows[(trendIdx - 1 + trendRows.length) % trendRows.length].label : undefined}
+          nextLabel={trendRows.length > 1 ? trendRows[(trendIdx + 1) % trendRows.length].label : undefined}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Compact date header: "MMM D 'YY" (no "Drawn" prefix). */
+function shortDate(dateKey: string): string {
+  const day = dayOf(dateKey);
+  if (!day) return '—';
+  const d = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return day;
+  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+  return `${mon} ${d.getUTCDate()} ’${String(d.getUTCFullYear()).slice(2)}`;
+}
+
+/**
+ * Build the per-cell hover detail for `row` at `dateKey`. The "prior" is the nearest EARLIER dated cell
+ * IN THE SAME ROW that carries a numeric value (never column adjacency — a blank middle column can't
+ * fabricate a wrong delta), matching the signed grid's rule. `cellText` is the bare value already shown.
+ */
+function buildCellDetail(row: FhirFlowsheetRow, dateKey: string, cellText: string): FhirCellDetail {
+  const numeric = row.numeric.find(n => n.dateKey === dateKey)?.value ?? null;
+  // nearest-earlier numeric reading (numeric series is aligned to sorted dateKeys, ascending)
+  let prior: { value: number; dateLabel: string } | null = null;
+  if (numeric !== null) {
+    for (let i = row.numeric.length - 1; i >= 0; i--) {
+      const n = row.numeric[i];
+      if (n.dateKey < dateKey && n.value !== null) { prior = { value: n.value, dateLabel: shortDate(n.dateKey) }; break; }
+    }
+  }
+  return { rowLabel: row.label, unit: row.unit, dateLabel: shortDate(dateKey), display: cellText, value: numeric, prior };
+}
