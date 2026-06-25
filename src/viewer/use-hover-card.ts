@@ -131,7 +131,7 @@ export function useHoverCard<T>(opts?: {
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
       const inCard = cardRef.current?.contains(t);
-      // Anchor membership: the consumer marks anchors with data-grid-cell-anchor; closest() covers it.
+      // Anchor membership: the consumer marks anchors with data-hovercard-anchor; closest() covers it.
       const inAnchor = t instanceof Element && t.closest('[data-hovercard-anchor]');
       if (!inCard && !inAnchor) closeNow();
     };
@@ -145,9 +145,9 @@ export function useHoverCard<T>(opts?: {
     };
   }, [open, closeNow]);
 
-  // Unmount cleanup: clear timers AND release the module counters if this instance unmounts while open
-  // (otherwise openCount leaks and the backdrop would defer Escape forever). closeNow is idempotent via
-  // isOpenRef; the trailing setOpen(null) on an unmounting component is a harmless no-op.
+  // Unmount cleanup: clear timers AND release the module-scope active-closer if this instance unmounts
+  // while open (otherwise activeCloser dangles at a dead instance). closeNow is idempotent via isOpenRef;
+  // the trailing setOpen(null) on an unmounting component is a harmless no-op.
   useEffect(() => () => { closeNowRef.current(); }, []);
 
   return { open, scheduleOpen, scheduleClose, openNow, closeNow, onCardEnter, onCardLeave, cardRef };

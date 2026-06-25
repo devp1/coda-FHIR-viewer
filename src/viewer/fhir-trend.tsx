@@ -3,8 +3,9 @@
 /**
  * Trend sparkline + trend modal — COPIED VERBATIM from the signed-chart measurement grid
  * (clinical-entry/clinical-chart-viewer.tsx: TrendSparkline + MeasurementTrendModal), adapted only to:
- *   - drop reference ranges / High-Low (the FHIR exports don't carry them): we never pass `refText`,
- *     never set `outOfRange`/`flag`, and the range/"In range"/"Out of range" legend rows are removed;
+ *   - drop reference ranges / High-Low (the FHIR exports don't carry them): there is no `refText`, no
+ *     `outOfRange`/`flag` on the trend point, and the range/"In range"/"Out of range" legend rows are
+ *     removed;
  *   - live self-contained in fhir-viewer (the pure trend-math helpers are imported — those are
  *     React-free leak-safe data helpers, not the surface chrome).
  *

@@ -11,15 +11,11 @@ export type MeasurementTrendPoint = {
       date with a null in the missing slot — the adapter deliberately emits half-pairs, and
       dropping the date would hide a real reading. */
   values: Array<number | null>;
-  outOfRange?: boolean;
-  flag?: 'H' | 'L';
 };
 
 type TrendCellLike = {
   value: number | null;
   valueText: string;
-  outOfRange?: boolean;
-  flag?: 'H' | 'L';
 } | null;
 
 type TrendColumnLike = { dateKey: string; label: string };
@@ -47,8 +43,6 @@ export function measurementTrendPoints(
       dateKey: column.dateKey,
       dateLabel: column.label,
       valueText: cell.valueText,
-      outOfRange: cell.outOfRange,
-      flag: cell.flag,
     };
     const compound = cell.valueText.trim().match(COMPOUND_READING);
     if (compound) {

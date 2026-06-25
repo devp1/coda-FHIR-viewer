@@ -295,6 +295,9 @@ export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; n
                     return (
                       <td
                         key={dateKey}
+                        // Marks this cell as a hover-card ANCHOR so the card's pointer-down-outside
+                        // dismissal (use-hover-card) treats a click on the cell as "inside", not "close".
+                        {...(populated ? { 'data-hovercard-anchor': '' } : {})}
                         className={`truncate whitespace-nowrap border-l border-hairline px-2 py-1 text-center align-middle tabular-nums text-ink ${populated ? 'cursor-default' : ''}`}
                         onPointerEnter={populated ? e => cellHover.scheduleOpen(buildCellDetail(row, dateKey, value), e.currentTarget.getBoundingClientRect()) : undefined}
                         onPointerLeave={populated ? () => cellHover.scheduleClose() : undefined}
