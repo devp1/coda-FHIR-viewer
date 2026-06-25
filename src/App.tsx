@@ -64,6 +64,22 @@ export function FhirChartProofClient() {
         setBusy(false);
         return;
       }
+      // The whole export is read into memory and parsed synchronously, so an accidental or hostile
+      // multi-gigabyte drop could lock the tab. Warn (never silently refuse) past a generous threshold
+      // — a real single- or multi-patient export is far smaller — and let the user opt in explicitly.
+      const totalBytes = ndjson.reduce((sum, f) => sum + f.size, 0);
+      const LARGE_INPUT_BYTES = 250 * 1024 * 1024; // 250 MB
+      if (totalBytes > LARGE_INPUT_BYTES) {
+        const gb = (totalBytes / (1024 * 1024 * 1024)).toFixed(1);
+        const proceed = window.confirm(
+          `This is a large drop (${ndjson.length} files, ~${gb} GB). It is read entirely into memory and ` +
+            `may freeze the browser for a while. Continue?`,
+        );
+        if (!proceed) {
+          setBusy(false);
+          return;
+        }
+      }
       const sources: FhirSourceFile[] = await Promise.all(
         ndjson.map(async f => ({ name: f.name, text: await f.text() })),
       );

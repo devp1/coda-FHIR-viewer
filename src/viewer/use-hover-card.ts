@@ -41,22 +41,10 @@ export type HoverCardController<T> = {
 };
 
 let lastClosedAt = 0; // module-scope warm window shared across every hover-card instance.
-let openCount = 0; // how many hover-cards are currently open (any instance) — read by the modal backdrop.
 // The currently-open controller's closeNow, so opening a second hover-card closes the first. Two
-// MeasurementGrid instances (Labs + Vitals) each hold their OWN open-state, so without this a direct
+// flowsheet instances (Labs + Vitals) each hold their OWN open-state, so without this a direct
 // cross-grid glide would briefly show two cards; this enforces "at most one hover-card open" globally.
 let activeCloser: (() => void) | null = null;
-
-/**
- * True while ANY hover-card popover is open. The ProfileModalBackdrop reads this to DEFER Escape to the
- * hover-card (its own capture-phase Escape handler closes just the card) instead of closing the whole
- * modal — keeping a single Escape authority (the backdrop decides; the hook owns the card's close). This
- * is exported as a plain predicate, not React state, precisely so the non-React document keydown listener
- * in the backdrop can consult it without coupling the two components.
- */
-export function isHoverCardOpen(): boolean {
-  return openCount > 0;
-}
 
 export function useHoverCard<T>(opts?: {
   openDelay?: number;
@@ -81,9 +69,9 @@ export function useHoverCard<T>(opts?: {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
   };
 
-  // This instance's own open/closed flag, so the module counters mutate ONCE per real transition (not on
-  // a glide re-open, and never double on a StrictMode-replayed setState updater — the counters live here
-  // in imperative code, not inside a setOpen updater).
+  // This instance's own open/closed flag, so the module-scope state (warm window, active closer) mutates
+  // ONCE per real transition — not on a glide re-open, and never double on a StrictMode-replayed setState
+  // updater (this lives here in imperative code, not inside a setOpen updater).
   const isOpenRef = useRef(false);
 
   const closeNow = useCallback(() => {
@@ -91,7 +79,6 @@ export function useHoverCard<T>(opts?: {
     if (isOpenRef.current) {
       isOpenRef.current = false;
       lastClosedAt = Date.now();
-      openCount = Math.max(0, openCount - 1);
       if (activeCloser === closeNowRef.current) activeCloser = null;
     }
     setOpen(null);
@@ -106,7 +93,7 @@ export function useHoverCard<T>(opts?: {
   const doOpen = useCallback((payload: T, anchor: DOMRect) => {
     // At most one hover-card open globally: close any other instance first (cross-grid glide).
     if (activeCloser && activeCloser !== closeNowRef.current) activeCloser();
-    if (!isOpenRef.current) { isOpenRef.current = true; openCount += 1; } // glide within a grid doesn't double-count.
+    if (!isOpenRef.current) isOpenRef.current = true; // glide within a grid doesn't re-toggle.
     activeCloser = closeNowRef.current;
     anchorRectRef.current = anchor;
     setOpen({ payload, anchor });

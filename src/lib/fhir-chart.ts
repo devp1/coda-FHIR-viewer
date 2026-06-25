@@ -152,14 +152,29 @@ function labelOf(concept: unknown, fallback = 'Unlabeled'): string {
   return fallback;
 }
 
-/** A stable grouping key for a CodeableConcept: "system|code" of the first coding, else lowered text. */
-function codeKeyOf(concept: unknown): string {
+/**
+ * A stable grouping key for a CodeableConcept: "system|code" of the first coding, else lowered text.
+ *
+ * `distinctWhenUnlabeled` controls what happens when the concept carries NEITHER a code NOR text. For
+ * the deduped clinical LISTS (Problems/Medications/Orders) the caller passes a resource id here: with
+ * nothing clinical to group on, collapsing such resources under a shared "unlabeled" key would assert
+ * they are the same thing (a judgment this viewer must not make), so each is keyed distinctly by its id.
+ * The flowsheet `place()` passes nothing — a value×date matrix wants all un-coded readings on ONE
+ * "Unlabeled" analyte row (its per-cell collision logic already keeps distinct values), so it retains
+ * the shared text-key grouping.
+ */
+function codeKeyOf(concept: unknown, distinctWhenUnlabeled?: string | null): string {
   for (const coding of codings(concept)) {
     const code = str(coding.code);
     if (code) return `${str(coding.system) ?? ''}|${code}`;
   }
   const c = concept as CodeableConcept | undefined;
-  return `text|${(str(c?.text) ?? labelOf(concept)).toLowerCase()}`;
+  const text = str(c?.text);
+  if (text) return `text|${text.toLowerCase()}`;
+  // No code and no text. Lists pass a distinct per-resource token (id or list position) so distinct
+  // un-coded resources never merge; the flowsheet passes nothing and keeps the shared "unlabeled" row.
+  if (distinctWhenUnlabeled != null) return `id|${distinctWhenUnlabeled}`;
+  return `text|${labelOf(concept).toLowerCase()}`;
 }
 
 /** Raw code value (first coding's code), verbatim. */
@@ -362,7 +377,8 @@ function dedupeList(
 ): { rows: ListAccumulator[]; dropped: number } {
   const map = new Map<string, ListAccumulator>();
   let dropped = 0;
-  for (const r of resources) {
+  for (let i = 0; i < resources.length; i++) {
+    const r = resources[i];
     const e = extract(r);
     if (!e) {
       // The extractor could not surface this resource (e.g. a medication with neither inline concept
@@ -370,7 +386,9 @@ function dedupeList(
       dropped += 1;
       continue;
     }
-    const codeKey = codeKeyOf(e.concept);
+    // For a code-less, text-less concept, key on the resource id — or, failing that, the list index — so
+    // distinct un-coded resources stay separate AND the key is deterministic across rebuilds.
+    const codeKey = codeKeyOf(e.concept, str((r as { id?: unknown }).id) ?? `pos-${i}`);
     const existing = map.get(codeKey);
     if (!existing) {
       map.set(codeKey, {
@@ -529,7 +547,7 @@ type FlowsheetAccumulator = {
 // PhysicianBench export confirmed `status` is `final` on 114,241/114,241 observations (an invariant in
 // this data), so a per-cell status badge would add visual noise without clinical signal. If a future
 // export carries non-final results, revisit (e.g. mark only non-final cells).
-function buildFlowsheet(observations: FhirResource[]): FhirFlowsheet {
+function buildFlowsheet(observations: FhirResource[]): { flowsheet: FhirFlowsheet; skipped: number } {
   const rows = new Map<string, FlowsheetAccumulator>();
   // Map a column key → its sort token. A collision suffix sorts immediately AFTER its base timestamp
   // (and before the next distinct timestamp) — fixing the old lexicographic "#10 before #2" bug and
@@ -575,6 +593,7 @@ function buildFlowsheet(observations: FhirResource[]): FhirFlowsheet {
     sortToken.set(key, `${dateKey} ${String(n).padStart(6, '0')}`);
   };
 
+  let skipped = 0; // categorized observations that surfaced NO cell (no value[x], no valued component)
   for (const obs of observations) {
     const dateKey = observationDate(obs) ?? 'undated';
     const components = (obs as { component?: unknown }).component;
@@ -599,7 +618,7 @@ function buildFlowsheet(observations: FhirResource[]): FhirFlowsheet {
       place((obs as { code?: unknown }).code, dateKey, parentRendered);
       placedAny = true;
     }
-    void placedAny; // (unmapped accounting for value-less observations is handled by the caller)
+    if (!placedAny) skipped += 1; // counted into chart.unmapped by the caller — never silently lost.
   }
 
   const allKeys = Array.from(sortToken.keys());
@@ -622,7 +641,7 @@ function buildFlowsheet(observations: FhirResource[]): FhirFlowsheet {
   // a physician scans by name, not by recency (user-confirmed).
   outRows.sort((a, b) => a.label.localeCompare(b.label));
 
-  return { dateKeys, rows: outRows };
+  return { flowsheet: { dateKeys, rows: outRows }, skipped };
 }
 
 // ── notes (DocumentReference) ─────────────────────────────────────────────────────────────────────
@@ -710,6 +729,7 @@ function buildSocial(observations: FhirResource[]): FhirSocialLine[] {
 
 /** Resource types fully consumed into cards above — excluded from the `unmapped` residual count. */
 const MAPPED_TYPES = new Set([
+  'Patient', // the chart subject itself (rendered in the header) — never an "unmapped" clinical resource
   'Condition',
   'MedicationRequest',
   'MedicationStatement',
@@ -853,8 +873,14 @@ export function buildFhirChart(bundle: PatientBundle): FhirChart {
     o => !hasCategory(o, 'laboratory') && !hasCategory(o, 'vital-signs') && !hasCategory(o, 'social-history'),
   );
 
-  const labs = buildFlowsheet(labObs);
-  const vitals = buildFlowsheet(vitalObs);
+  const labsBuilt = buildFlowsheet(labObs);
+  const vitalsBuilt = buildFlowsheet(vitalObs);
+  const labs = labsBuilt.flowsheet;
+  const vitals = vitalsBuilt.flowsheet;
+  // A categorized lab/vital Observation that surfaced no cell (no value[x], no valued component) is a
+  // present resource we couldn't render — count it as residual so nothing is silently dropped.
+  noteDrop('Observation (laboratory, no value)', labsBuilt.skipped);
+  noteDrop('Observation (vital-signs, no value)', vitalsBuilt.skipped);
   const social = buildSocial(socialObs);
 
   // Orders & Procedures: Procedure + ServiceRequest, deduped by code, alphabetical.

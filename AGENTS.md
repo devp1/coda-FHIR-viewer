@@ -146,6 +146,14 @@ mechanical (group by code, count, keep latest), not a clinical opinion about wha
 can't be placed on a card is **counted** in `chart.unmapped`. If you add a card or field, source it
 verbatim from the model; absent → em-dash, never a guess.
 
+Two corollaries that an audit found broken and `test/fhir-chart.test.ts` now guards — keep them true:
+- **A categorized lab/vital Observation with no `value[x]`** (and no valued component) surfaces no
+  flowsheet cell, so it is counted in `chart.unmapped` (`Observation (laboratory|vital-signs, no value)`)
+  — `buildFlowsheet` returns its `skipped` count for exactly this. Never `void` it away.
+- **Code-less, text-less resources stay DISTINCT** (one row each, keyed by id/position), never collapsed
+  under a shared "Unlabeled" key — merging them would assert they are the same thing. (A concept WITH
+  text still groups by text; the flowsheet keeps one shared "Unlabeled" analyte row by design.)
+
 ### 3. Accessibility on the tables
 
 The ClinicalTable whole-row expand uses a real `<button>` (keyboard + `aria-expanded`/`aria-controls`),
@@ -175,7 +183,11 @@ cards and tabs, green accent underline on both), one count chip, one date stamp,
    visual confirmation, not a substitute.
 5. **Keep it self-contained.** No backend, no network, no monorepo import. Data never leaves the
    browser — that's a privacy guarantee, not an accident. Don't add an upload, a CDN font, or a server
-   call.
+   call. The guarantee is **enforced**, not just behavioral: the built single-file HTML carries a
+   restrictive CSP with `connect-src 'none'` (injected at build time only — `vite.config.ts`
+   `injectCspOnBuild`, kept out of dev so HMR works), and `publicDir: false` keeps any stray fixture
+   out of the build output. If you add a feature that legitimately needs a network/worker/blob, you
+   must consciously widen the CSP — that friction is the point.
 
 ---
 
@@ -185,7 +197,7 @@ cards and tabs, green accent underline on both), one count chip, one date stamp,
 npm install
 npm run dev          # hot-reload dev server → http://localhost:5173
 npm run typecheck    # tsc --noEmit
-npm test             # the flowsheet column-layout invariant regression test
+npm test             # fhir-chart fidelity + flowsheet column-layout invariant regression tests
 npm run build:html   # → dist/index.html, the single shippable file
 ```
 

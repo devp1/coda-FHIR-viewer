@@ -15,8 +15,6 @@ export type MeasurementTrendPoint = {
   flag?: 'H' | 'L';
 };
 
-export type TrendBand = { low: number; high: number };
-
 type TrendCellLike = {
   value: number | null;
   valueText: string;
@@ -108,33 +106,3 @@ export function trendLabelVisibility(xs: number[], minGap = 30): boolean[] {
   });
 }
 
-// Reference bands parsed from DISPLAY text, one band PER SERIES, fail-quiet (display-only):
-//  - "0.7–1.3 mg/dL" with 1 series → [{0.7,1.3}] (the unit slash never splits a band).
-//  - "4.5-11 ×10⁹/L" with 1 series → [{4.5,11}].
-//  - "90-120/60-80" with 2 series → [{90,120},{60,80}] (systolic + diastolic bands).
-//  - "90-120/60-80" with 1 series → [] (a compound range cannot honestly band one series).
-//  - "<5", "negative", one-sided or qualitative → [] — never a fabricated bound.
-export function parseTrendReferenceBands(text: string | undefined, seriesCount: number): TrendBand[] {
-  if (!text) return [];
-  const RANGE = new RegExp(`(-?${NUMERIC})\\s*(?:-|–|—|to)\\s*(-?${NUMERIC})`);
-  const rangeIn = (segment: string): TrendBand | null => {
-    const m = segment.match(RANGE);
-    if (!m) return null;
-    const low = Number(m[1]);
-    const high = Number(m[2]);
-    return Number.isFinite(low) && Number.isFinite(high) && high > low ? { low, high } : null;
-  };
-  // Compound form: a slash with a numeric RANGE on each side (unit slashes like "×10⁹/L" have
-  // no range after the slash, so they fall through to the single-band path).
-  const sides = text.split('/');
-  if (sides.length >= 2) {
-    const sideBands = sides.map(rangeIn);
-    if (sideBands.length >= 2 && sideBands.slice(0, 2).every(Boolean)) {
-      // Honest only when the band count can map 1:1 onto the series.
-      return seriesCount === 2 ? (sideBands.slice(0, 2) as TrendBand[]) : [];
-    }
-  }
-  if (seriesCount !== 1) return [];
-  const single = rangeIn(text);
-  return single ? [single] : [];
-}

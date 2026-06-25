@@ -22,11 +22,28 @@ import {
   type MeasurementTrendPoint,
   type TrendWindowPreset,
 } from './measurement-trend-data';
-import { resolveTrendLabels, trendLabelRect, type TrendLabelBox } from './trend-label-layout';
+import { resolveTrendLabels, type TrendLabelBox } from './trend-label-layout';
 import { useHoverCard } from './use-hover-card';
 
 export { measurementTrendPoints, useHoverCard };
 export type { MeasurementTrendPoint };
+
+/**
+ * Palette for the SVG trend chrome. These mirror the named Coda tokens (tailwind.config.js / DESIGN.md)
+ * by their hex values — SVG `stroke`/`fill` can't read a Tailwind class, so the tokens are restated once
+ * here as constants rather than scattered as raw literals, so a palette change updates them in one place.
+ * (The bespoke low-alpha tints below — grip/scrim/hairline washes — are SVG-specific opacity chrome with
+ * no named token, so they stay inline.)
+ */
+const TREND = {
+  ink: '#0A0A0A', // token: ink
+  inkMid: '#525252', // token: ink-mid
+  inkLight: '#8A8A8A', // token: ink-light
+  inkFaint: '#A3A3A3', // token: ink-faint
+  ok: '#1a6b4a', // token: ok (brand green)
+  info: '#2d3e50', // token: info
+  surface: '#FFFFFF', // token: surface
+} as const;
 
 /**
  * Per-cell hover detail — COPIED from the signed grid's ReferencePopover (clinical-chart-viewer.tsx),
@@ -143,8 +160,8 @@ export function TrendSparkline({ points }: { points: MeasurementTrendPoint[] }) 
   const last = xy[xy.length - 1];
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true" className="block select-none">
-      <polyline points={xy.map(d => `${d.x},${d.y}`).join(' ')} fill="none" stroke="#8A8A8A" strokeWidth="1.2" />
-      <circle cx={last.x} cy={last.y} r="1.8" fill="#0A0A0A" />
+      <polyline points={xy.map(d => `${d.x},${d.y}`).join(' ')} fill="none" stroke={TREND.inkLight} strokeWidth="1.2" />
+      <circle cx={last.x} cy={last.y} r="1.8" fill={TREND.ink} />
     </svg>
   );
 }
@@ -198,8 +215,8 @@ export function MeasurementTrendModal({ trend, switchNoun, onClose, onBlurClose,
     const fixed = Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
     return fixed.includes('.') ? fixed.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') : fixed;
   };
-  const SYS_HEX = '#1a6b4a';
-  const DIA_HEX = '#2d3e50';
+  const SYS_HEX = TREND.ok;
+  const DIA_HEX = TREND.info;
   type PlotLabel = TrendLabelBox & { fill: string; fillOpacity?: number };
   const LABEL_CLAMP = { minY: 10, maxY: baselineY };
   const labeled = trendLabelVisibility(points.map(p => xOf(p)));
@@ -220,7 +237,7 @@ export function MeasurementTrendModal({ trend, switchNoun, onClose, onBlurClose,
         priority: 1,
         shift: 'both',
         ...LABEL_CLAMP,
-        fill: '#525252',
+        fill: TREND.inkMid,
       });
     });
   } else {
@@ -229,13 +246,12 @@ export function MeasurementTrendModal({ trend, switchNoun, onClose, onBlurClose,
       const x = xOf(p);
       const sys = p.values[0];
       const dia = p.values[1] ?? null;
-      if (sys !== null) plotLabels.push({ key: `sys:${p.dateKey}`, x, y: yOf(sys) - 9, lines: [fmtValue(sys)], anchor: 'middle', fontSize: 9.5, priority: 1, shift: 'up', ...LABEL_CLAMP, fill: '#525252' });
-      if (dia !== null) plotLabels.push({ key: `dia:${p.dateKey}`, x, y: yOf(dia) + 17, lines: [fmtValue(dia)], anchor: 'middle', fontSize: 9.5, priority: 1, shift: 'down', ...LABEL_CLAMP, fill: '#525252' });
-      if (sys !== null && dia === null) plotLabels.push({ key: `half:${p.dateKey}`, x, y: yOf(sys) + 17, lines: ['/—'], anchor: 'middle', fontSize: 9.5, priority: 1, shift: 'down', ...LABEL_CLAMP, fill: '#A3A3A3' });
-      if (sys === null && dia !== null) plotLabels.push({ key: `half:${p.dateKey}`, x, y: yOf(dia) - 9, lines: ['—/'], anchor: 'middle', fontSize: 9.5, priority: 1, shift: 'up', ...LABEL_CLAMP, fill: '#A3A3A3' });
+      if (sys !== null) plotLabels.push({ key: `sys:${p.dateKey}`, x, y: yOf(sys) - 9, lines: [fmtValue(sys)], anchor: 'middle', fontSize: 9.5, priority: 1, shift: 'up', ...LABEL_CLAMP, fill: TREND.inkMid });
+      if (dia !== null) plotLabels.push({ key: `dia:${p.dateKey}`, x, y: yOf(dia) + 17, lines: [fmtValue(dia)], anchor: 'middle', fontSize: 9.5, priority: 1, shift: 'down', ...LABEL_CLAMP, fill: TREND.inkMid });
+      if (sys !== null && dia === null) plotLabels.push({ key: `half:${p.dateKey}`, x, y: yOf(sys) + 17, lines: ['/—'], anchor: 'middle', fontSize: 9.5, priority: 1, shift: 'down', ...LABEL_CLAMP, fill: TREND.inkFaint });
+      if (sys === null && dia !== null) plotLabels.push({ key: `half:${p.dateKey}`, x, y: yOf(dia) - 9, lines: ['—/'], anchor: 'middle', fontSize: 9.5, priority: 1, shift: 'up', ...LABEL_CLAMP, fill: TREND.inkFaint });
     });
   }
-  void trendLabelRect; // (retained import parity with the source; band path that used it is removed)
   const resolvedLabels = resolveTrendLabels(plotLabels);
   const monthYearLabel = (ms: number) => {
     const d = new Date(ms);
@@ -352,13 +368,13 @@ export function MeasurementTrendModal({ trend, switchNoun, onClose, onBlurClose,
             <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="group" aria-label={`${trend.label} values across ${points.length} dates`} className="select-none" fontFamily="JetBrains Mono, ui-monospace, monospace">
               <line x1={L} y1={baselineY} x2={L + plotW} y2={baselineY} stroke="rgba(0,0,0,0.12)" strokeWidth="1" />
               {points.length === 0 && (
-                <text x={L + plotW / 2} y={(T + baselineY) / 2} textAnchor="middle" fontSize="10" fill="#A3A3A3">No results in this window — drag the strip or pick a preset</text>
+                <text x={L + plotW / 2} y={(T + baselineY) / 2} textAnchor="middle" fontSize="10" fill={TREND.inkFaint}>No results in this window — drag the strip or pick a preset</text>
               )}
               {!dual && (
                 <g>
                   <polyline
                     fill="none"
-                    stroke="#525252"
+                    stroke={TREND.inkMid}
                     strokeWidth="1.5"
                     points={points.map(p => p.values[0] !== null ? `${xOf(p)},${yOf(p.values[0]!)}` : null).filter(Boolean).join(' ')}
                   />
@@ -373,7 +389,7 @@ export function MeasurementTrendModal({ trend, switchNoun, onClose, onBlurClose,
                         cx={x}
                         cy={y}
                         r={3.2}
-                        fill="#0A0A0A"
+                        fill={TREND.ink}
                         tabIndex={labeled[i] ? undefined : 0}
                         aria-label={labeled[i] ? undefined : `${p.dateLabel}: ${readingText(p)}`}
                         className="focus:outline-none"
@@ -405,7 +421,7 @@ export function MeasurementTrendModal({ trend, switchNoun, onClose, onBlurClose,
                         onFocus={() => setPopout({ x, y: anchorY, point: p })}
                         onBlur={() => setPopout(cur => (cur?.point === p ? null : cur))}
                       >
-                        {sys !== null && dia !== null && <line x1={x} y1={yOf(sys)} x2={x} y2={yOf(dia)} stroke="#A3A3A3" strokeWidth="1.5" />}
+                        {sys !== null && dia !== null && <line x1={x} y1={yOf(sys)} x2={x} y2={yOf(dia)} stroke={TREND.inkFaint} strokeWidth="1.5" />}
                         {sys !== null && <circle cx={x} cy={yOf(sys)} r="3.6" fill={SYS_HEX} />}
                         {dia !== null && <circle cx={x} cy={yOf(dia)} r="3.6" fill={DIA_HEX} />}
                       </g>
@@ -422,7 +438,7 @@ export function MeasurementTrendModal({ trend, switchNoun, onClose, onBlurClose,
                       ))}
                 </text>
               ))}
-              <g fontSize="8.5" fill="#8A8A8A" textAnchor="middle">
+              <g fontSize="8.5" fill={TREND.inkLight} textAnchor="middle">
                 {tickLabels.map(tick => (
                   <g key={tick.x}>
                     <text x={tick.x} y={H - 16}>{tick.label.toUpperCase()}</text>
@@ -461,18 +477,18 @@ export function MeasurementTrendModal({ trend, switchNoun, onClose, onBlurClose,
               onPointerCancel={onStripPointerUp}
               fontFamily="JetBrains Mono, ui-monospace, monospace"
             >
-              <rect x={L} y={2} width={plotW} height={26} fill="#FFFFFF" stroke="rgba(0,0,0,0.08)" />
-              <polyline fill="none" stroke="#A3A3A3" strokeWidth="1" points={stripSeries.map(d => `${stripXOf(d.ms)},${stripYOf(d.v)}`).join(' ')} />
+              <rect x={L} y={2} width={plotW} height={26} fill={TREND.surface} stroke="rgba(0,0,0,0.08)" />
+              <polyline fill="none" stroke={TREND.inkFaint} strokeWidth="1" points={stripSeries.map(d => `${stripXOf(d.ms)},${stripYOf(d.v)}`).join(' ')} />
               {stripSeries.map(d => (
-                <circle key={d.ms} cx={stripXOf(d.ms)} cy={stripYOf(d.v)} r="1.6" fill="#8A8A8A" />
+                <circle key={d.ms} cx={stripXOf(d.ms)} cy={stripYOf(d.v)} r="1.6" fill={TREND.inkLight} />
               ))}
               {stripWinX > L + 0.5 && <rect x={L} y={2} width={stripWinX - L} height={26} fill="rgba(10,10,10,0.05)" />}
               {stripWinX + stripWinW < L + plotW - 0.5 && <rect x={stripWinX + stripWinW} y={2} width={L + plotW - stripWinX - stripWinW} height={26} fill="rgba(10,10,10,0.05)" />}
-              <rect x={stripWinX} y={2} width={stripWinW} height={26} fill="rgba(26,107,74,0.06)" stroke="#1a6b4a" strokeOpacity="0.5" className={preset === 'ALL' ? undefined : 'cursor-grab'} />
-              <rect x={stripWinX - 3} y={6} width={3.5} height={18} rx={1.5} fill="#1a6b4a" opacity="0.75" />
-              <rect x={stripWinX + stripWinW - 0.5} y={6} width={3.5} height={18} rx={1.5} fill="#1a6b4a" opacity="0.75" />
-              <text x={L} y={40} fontSize="8" fill="#A3A3A3">{monthYearLabel(firstMs).toUpperCase()}</text>
-              <text x={L + plotW} y={40} fontSize="8" fill="#A3A3A3" textAnchor="end">{monthYearLabel(lastMs).toUpperCase()}</text>
+              <rect x={stripWinX} y={2} width={stripWinW} height={26} fill="rgba(26,107,74,0.06)" stroke={TREND.ok} strokeOpacity="0.5" className={preset === 'ALL' ? undefined : 'cursor-grab'} />
+              <rect x={stripWinX - 3} y={6} width={3.5} height={18} rx={1.5} fill={TREND.ok} opacity="0.75" />
+              <rect x={stripWinX + stripWinW - 0.5} y={6} width={3.5} height={18} rx={1.5} fill={TREND.ok} opacity="0.75" />
+              <text x={L} y={40} fontSize="8" fill={TREND.inkFaint}>{monthYearLabel(firstMs).toUpperCase()}</text>
+              <text x={L + plotW} y={40} fontSize="8" fill={TREND.inkFaint} textAnchor="end">{monthYearLabel(lastMs).toUpperCase()}</text>
             </svg>
           </div>
         )}
