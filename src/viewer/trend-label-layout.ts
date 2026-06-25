@@ -1,8 +1,8 @@
-// Collision-aware label layout for the measurement trend modal (R5, user-approved 2026-06-10).
-// EVERY plot label (dot values, reference-band bounds, REF/SYS/DIA gutter tags) flows through one
-// resolver so "labels never overlap" is a tested property of the layout, not a per-case offset
-// tweak — the R4 fixed-offset placements collided whenever the scale compressed (outlier vs band)
-// or two BP bands sat close together. React-free so synthetic extremes get real unit coverage.
+// Collision-aware label layout for the measurement trend modal.
+// EVERY plot label (dot values, SYS/DIA gutter tags) flows through one resolver so "labels never
+// overlap" is a tested property of the layout, not a per-case offset tweak — fixed-offset placements
+// collided whenever the scale compressed or two BP series sat close together. React-free so synthetic
+// extremes get real unit coverage.
 
 export type TrendLabelBox = {
   /** Stable identity — the modal renders fills/weights per label by key prefix. */
@@ -11,8 +11,8 @@ export type TrendLabelBox = {
   /** SVG text baseline of the FIRST line. The resolver only ever moves y, never x: a value
       label must stay over its own dot, a gutter label inside its gutter. */
   y: number;
-  /** Multi-line blocks (the SYS/DIA tag + range pairs) move as ONE rect so the resolver can
-      never split a tag from its range. */
+  /** Multi-line blocks (e.g. the stacked SYS/DIA value pair) move as ONE rect so the resolver can
+      never split one line of a block from the rest. */
   lines: string[];
   anchor: 'start' | 'middle' | 'end';
   fontSize: number;

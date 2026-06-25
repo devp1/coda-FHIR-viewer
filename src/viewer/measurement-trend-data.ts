@@ -1,6 +1,6 @@
-// Pure data layer for the measurement trend modal (R3 M4). Kept React-free so the risky
-// parsing (compound BP reference ranges, half-pair readings, unit suffixes with slashes) has
-// real behavioral test coverage — source-shape guards alone let two BP bugs through (Codex P1/P2).
+// Pure data layer for the measurement trend modal. Kept React-free so the risky parsing (compound BP
+// readings like "118/76", half-pair readings like "144/—", unit suffixes with slashes) has real
+// behavioral test coverage. (No reference ranges or High/Low flags — raw FHIR exports don't carry them.)
 
 export type MeasurementTrendPoint = {
   dateKey: string;
