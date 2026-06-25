@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type { FhirChart, FhirListRow, FhirNote, FhirSocialLine } from '../lib/fhir-chart';
 import { FhirCard, FhirListGroup, FhirListItem } from './fhir-card';
 import { ClinicalTable, type ColumnDef, type SortState } from './fhir-clinical-table';
@@ -139,61 +139,74 @@ export function FhirChartViewer({ chart }: { chart: FhirChart }) {
   );
 }
 
-/* ── Dashboard: OpenEMR multi-column card grid (demographics.php:1089-1102) ───────────────────────── */
+/* ── Dashboard: OpenEMR masonry card grid (templates/patient/dashboard.html.twig) ─────────────────── */
 
 function Dashboard({ chart, onOpenSection }: { chart: FhirChart; onOpenSection: (k: SectionKey) => void }) {
-  // OpenEMR splits 12 cols across the active summary cards. We mirror that as a responsive grid:
-  // Allergies / Problems / Medications side-by-side on wide screens (the real Dashboard trio), then
-  // Labs / Vitals / Orders / Notes summaries below.
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-3">
-        {chart.allergies.length > 0 && (
-          <FhirCard title="Allergies" count={chart.allergies.length}>
-            <SummaryList rows={chart.allergies} limit={8} emphasisSevere onMore={() => onOpenSection('allergies')} />
-          </FhirCard>
-        )}
-        {chart.problems.length > 0 && (
-          <FhirCard title="Problems" count={chart.problems.length}>
-            <SummaryList rows={chart.problems} limit={8} onMore={() => onOpenSection('problems')} />
-          </FhirCard>
-        )}
-        {chart.medications.length > 0 && (
-          <FhirCard title="Medications" count={chart.medications.length}>
-            <SummaryList rows={chart.medications} limit={8} onMore={() => onOpenSection('medications')} />
-          </FhirCard>
-        )}
-      </div>
+  // OpenEMR's real dashboard (templates/patient/dashboard.html.twig) lays the cards out with Masonry —
+  // they flow and PACK to fill the columns, so an absent card (e.g. no Allergies) never leaves a dead
+  // column and a short card never leaves a tall void beneath it. We reproduce that masonry with pure
+  // CSS multi-column (no JS): every card is `break-inside-avoid` and the column count is responsive.
+  // Order is the clinical reading order; columns fill top-to-bottom then left-to-right (OpenEMR's
+  // masonry reads the same way). Only non-empty cards are emitted, so there are no holes to fill.
+  const cards: ReactNode[] = [];
+  if (chart.allergies.length > 0)
+    cards.push(
+      <FhirCard key="allergies" title="Allergies" count={chart.allergies.length}>
+        <SummaryList rows={chart.allergies} limit={8} emphasisSevere onMore={() => onOpenSection('allergies')} />
+      </FhirCard>,
+    );
+  if (chart.problems.length > 0)
+    cards.push(
+      <FhirCard key="problems" title="Problems" count={chart.problems.length}>
+        <SummaryList rows={chart.problems} limit={8} onMore={() => onOpenSection('problems')} />
+      </FhirCard>,
+    );
+  if (chart.medications.length > 0)
+    cards.push(
+      <FhirCard key="medications" title="Medications" count={chart.medications.length}>
+        <SummaryList rows={chart.medications} limit={8} onMore={() => onOpenSection('medications')} />
+      </FhirCard>,
+    );
+  if (chart.ordersAndProcedures.length > 0)
+    cards.push(
+      <FhirCard key="orders" title="Orders & Procedures" count={chart.ordersAndProcedures.length}>
+        <SummaryList rows={chart.ordersAndProcedures} limit={8} onMore={() => onOpenSection('orders')} />
+      </FhirCard>,
+    );
+  if (chart.labs.rows.length > 0)
+    cards.push(
+      <FhirCard key="labs" title="Labs" count={chart.labs.rows.length}>
+        <OpenSectionLink label="Open flowsheet →" onClick={() => onOpenSection('labs')} />
+      </FhirCard>,
+    );
+  if (chart.vitals.rows.length > 0)
+    cards.push(
+      <FhirCard key="vitals" title="Vitals" count={chart.vitals.rows.length}>
+        <OpenSectionLink label="Open flowsheet →" onClick={() => onOpenSection('vitals')} />
+      </FhirCard>,
+    );
+  if (chart.notes.length > 0)
+    cards.push(
+      <FhirCard key="notes" title="Notes" count={chart.notes.length}>
+        <OpenSectionLink label="Open notes →" onClick={() => onOpenSection('notes')} />
+      </FhirCard>,
+    );
 
-      <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-3">
-        {chart.ordersAndProcedures.length > 0 && (
-          <FhirCard title="Orders & Procedures" count={chart.ordersAndProcedures.length} initiallyCollapsed>
-            <SummaryList rows={chart.ordersAndProcedures} limit={8} onMore={() => onOpenSection('orders')} />
-          </FhirCard>
-        )}
-        {chart.labs.rows.length > 0 && (
-          <FhirCard title="Labs" count={chart.labs.rows.length} initiallyCollapsed>
-            <button type="button" onClick={() => onOpenSection('labs')} className="mono px-1 py-1 text-[0.66rem] uppercase tracking-wider text-ink-mid hover:text-ok">
-              Open flowsheet →
-            </button>
-          </FhirCard>
-        )}
-        {chart.vitals.rows.length > 0 && (
-          <FhirCard title="Vitals" count={chart.vitals.rows.length} initiallyCollapsed>
-            <button type="button" onClick={() => onOpenSection('vitals')} className="mono px-1 py-1 text-[0.66rem] uppercase tracking-wider text-ink-mid hover:text-ok">
-              Open flowsheet →
-            </button>
-          </FhirCard>
-        )}
-        {chart.notes.length > 0 && (
-          <FhirCard title="Notes" count={chart.notes.length} initiallyCollapsed>
-            <button type="button" onClick={() => onOpenSection('notes')} className="mono px-1 py-1 text-[0.66rem] uppercase tracking-wider text-ink-mid hover:text-ok">
-              Open notes →
-            </button>
-          </FhirCard>
-        )}
-      </div>
+  // Masonry via CSS columns: 1 col (narrow) → 2 (md) → 3 (xl). `gap-3` between columns; each card gets
+  // `mb-3` for the vertical gap and `break-inside-avoid` so a card never splits across a column break.
+  return (
+    <div className="columns-1 gap-3 md:columns-2 xl:columns-3 [&>*]:mb-3 [&>*]:break-inside-avoid">
+      {cards}
     </div>
+  );
+}
+
+/** The "Open flowsheet/notes →" affordance inside a Dashboard summary card whose detail is its own tab. */
+function OpenSectionLink({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="mono px-1 py-1 text-[0.66rem] uppercase tracking-wider text-ink-mid hover:text-ok">
+      {label}
+    </button>
   );
 }
 
