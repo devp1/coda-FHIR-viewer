@@ -249,7 +249,7 @@ export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; n
                 <span className="mono text-[0.6rem] uppercase tracking-wider text-ink-faint">{noun}</span>
               </th>
               {visibleDates.map(dateKey => (
-                <th key={dateKey} className="bg-surface-dim px-2 py-1.5 text-right align-bottom font-normal">
+                <th key={dateKey} className="border-l border-hairline bg-surface-dim px-2 py-1.5 text-center align-bottom font-normal">
                   <span className="mono whitespace-nowrap text-[0.62rem] text-ink-mid">{shortDate(dateKey)}</span>
                 </th>
               ))}
@@ -295,7 +295,7 @@ export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; n
                     return (
                       <td
                         key={dateKey}
-                        className={`truncate whitespace-nowrap px-2 py-1 text-right align-middle tabular-nums text-ink ${populated ? 'cursor-default' : ''}`}
+                        className={`truncate whitespace-nowrap border-l border-hairline px-2 py-1 text-center align-middle tabular-nums text-ink ${populated ? 'cursor-default' : ''}`}
                         onPointerEnter={populated ? e => cellHover.scheduleOpen(buildCellDetail(row, dateKey, value), e.currentTarget.getBoundingClientRect()) : undefined}
                         onPointerLeave={populated ? () => cellHover.scheduleClose() : undefined}
                         onFocus={populated ? e => cellHover.openNow(buildCellDetail(row, dateKey, value), e.currentTarget.getBoundingClientRect()) : undefined}
