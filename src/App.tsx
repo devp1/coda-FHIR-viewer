@@ -16,12 +16,34 @@ type FsDirEntry = FileSystemEntry & {
   createReader: () => { readEntries: (cb: (entries: FileSystemEntry[]) => void, err?: (e: unknown) => void) => void };
 };
 
+/**
+ * Wrap a legacy callback-style entry read in a Promise THAT CANNOT HANG FOREVER.
+ *
+ * Why this matters: after a `drop` event handler yields (the first `await`), the browser reverts the
+ * drag data store to "protected mode". The `FileSystemEntry` handles captured during the event are then
+ * invalidated, and a deferred `readEntries()`/`file()` call may invoke NEITHER its success nor its error
+ * callback — a bare `new Promise` would stay pending forever, freezing the UI on "Reading…". Racing each
+ * read against a timeout converts that silent hang into a catchable error the caller can surface.
+ */
+function entryRead<T>(run: (resolve: (v: T) => void, reject: (e: unknown) => void) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('Reading the dropped folder stalled. Try clicking the box to pick the folder instead.')),
+      10_000,
+    );
+    run(
+      v => { clearTimeout(timer); resolve(v); },
+      e => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 /** Recursively walk dropped directory/file entries into a flat File[] (folder drop → all nested files). */
 async function collectFilesFromEntries(entries: FileSystemEntry[]): Promise<File[]> {
   const out: File[] = [];
   const visit = async (entry: FileSystemEntry): Promise<void> => {
     if (entry.isFile) {
-      const file = await new Promise<File>((resolve, reject) => (entry as FsFileEntry).file(resolve, reject));
+      const file = await entryRead<File>((resolve, reject) => (entry as FsFileEntry).file(resolve, reject));
       out.push(file);
       return;
     }
@@ -29,7 +51,7 @@ async function collectFilesFromEntries(entries: FileSystemEntry[]): Promise<File
       const reader = (entry as FsDirEntry).createReader();
       // readEntries returns at most ~100 entries per call — loop until it returns an empty batch.
       for (;;) {
-        const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+        const batch = await entryRead<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
         if (batch.length === 0) break;
         for (const child of batch) await visit(child);
       }
@@ -102,20 +124,30 @@ export function FhirChartProofClient() {
     async (e: DragEvent) => {
       e.preventDefault();
       setDragOver(false);
-      // A FOLDER drop puts nothing in `dataTransfer.files` — the folder arrives as a DataTransferItem
-      // whose `webkitGetAsEntry()` is a directory we must walk recursively. Plain FILE drops still
-      // populate `.files`. Prefer the entry walk (covers both folders and files); fall back to `.files`.
+
+      // CAPTURE THE DRAG DATA STORE SYNCHRONOUSLY, BEFORE ANY `await`. After the drop handler yields,
+      // the browser reverts the drag data store to "protected mode" and these objects go invalid — so
+      // both the directory entries AND the plain file list must be read out now, while still live.
+      // A FOLDER drop puts nothing in `dataTransfer.files`; it arrives as DataTransferItems whose
+      // `webkitGetAsEntry()` is a directory to walk recursively. Plain FILE drops populate `.files`.
       const entries = Array.from(e.dataTransfer.items)
         .map(item => (typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null))
         .filter((entry): entry is FileSystemEntry => entry !== null);
-      let files: File[];
-      if (entries.length > 0) {
-        setBusy(true);
-        files = await collectFilesFromEntries(entries);
-      } else {
-        files = Array.from(e.dataTransfer.files);
+      const plainFiles = Array.from(e.dataTransfer.files);
+
+      // The whole drop is handled under ONE try/finally so the "Reading…" busy flag is ALWAYS cleared
+      // and any failure (a stalled/rejected folder read — see `entryRead`) surfaces as an error instead
+      // of an unhandled rejection that strands "Reading…" on screen forever.
+      setBusy(true);
+      setError(null);
+      try {
+        const files = entries.length > 0 ? await collectFilesFromEntries(entries) : plainFiles;
+        await loadFiles(files);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to read the dropped folder.');
+      } finally {
+        setBusy(false);
       }
-      await loadFiles(files);
     },
     [loadFiles],
   );
