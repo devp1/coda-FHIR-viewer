@@ -45,11 +45,12 @@ Multiple patients in one export are fine — you'll get a picker.
 ```bash
 npm install
 npm run dev        # local dev server with hot reload → http://localhost:5173
-npm run build:html # produces dist/index.html — the single self-contained file to share
+npm run build:html # builds and refreshes coda-fhir-viewer.html
 ```
 
-`npm run build:html` inlines all JS + CSS into one `dist/index.html` (via `vite-plugin-singlefile`).
-Rename it to `coda-fhir-viewer.html` and that one file is the whole shippable app.
+`npm run build:html` inlines all JS + CSS into `dist/index.html` (via `vite-plugin-singlefile`) and
+then copies it to the repository root as **`coda-fhir-viewer.html`**. Treat `dist/index.html` as the
+intermediate build output; **`coda-fhir-viewer.html` is the distributable file to share/open**.
 
 ---
 

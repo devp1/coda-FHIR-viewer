@@ -9,7 +9,8 @@ Guidance for anyone (human or AI) working in this repo. Read this before changin
 A **standalone, browser-only viewer for FHIR R4 patient exports.** Drop a FHIR NDJSON bulk-export and
 it renders a compact, EHR-style patient chart entirely in the browser — no server, no database, no
 network call, nothing uploaded. `npm run build:html` inlines all JS+CSS into one `dist/index.html` that
-anyone can double-click to open offline.
+is copied to root `coda-fhir-viewer.html`. **`coda-fhir-viewer.html` is the distributable file** anyone
+can double-click to open offline; treat `dist/index.html` as build output only.
 
 **North star:** make a raw, multi-year, heavily-duplicated FHIR export *legible at a glance* the way a
 real EHR chart is — dense but scannable, faithful to the data, never inventing or hiding anything.
@@ -204,8 +205,11 @@ npm install
 npm run dev          # hot-reload dev server → http://localhost:5173
 npm run typecheck    # tsc --noEmit
 npm test             # fhir-chart fidelity + flowsheet column-layout invariant regression tests
-npm run build:html   # → dist/index.html, the single shippable file
+npm run build:html   # → dist/index.html, then refreshes root coda-fhir-viewer.html
 ```
+
+The file to distribute/share is **`coda-fhir-viewer.html`** at the repository root. Do not leave it
+stale after a build; `npm run build:html` refreshes it from `dist/index.html`.
 
 Before committing anything non-trivial: `npm run typecheck`, build, and verify in the browser (load a
 FHIR export, click through the changed surface, look at it). For flowsheet/layout changes also confirm

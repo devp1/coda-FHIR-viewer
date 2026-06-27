@@ -33,6 +33,15 @@ function dayOf(dateKey: string): string {
   return dateKey.startsWith('undated') ? '' : dateKey.slice(0, 10);
 }
 
+function endOfMonth(monthKey: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
+  if (!match) return monthKey;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${monthKey}-${String(last).padStart(2, '0')}`;
+}
+
 /**
  * Full-width Labs / Vitals flowsheet — own dense matrix (fast, virtualized, searchable), with the
  * REAL trend copied from the signed grid: hover a populated row → an inline sparkline in the name
@@ -46,10 +55,14 @@ export function FhirFlowsheet({
   flowsheet,
   noun,
   grouping,
+  focusDateKey,
+  focusToken,
 }: {
   flowsheet: FhirFlowsheet;
   noun: 'Lab result' | 'Vital';
   grouping?: 'labs';
+  focusDateKey?: string | null;
+  focusToken?: number;
 }) {
   const [query, setQuery] = useState('');
   const [trendKey, setTrendKey] = useState<string | null>(null);
@@ -76,6 +89,15 @@ export function FhirFlowsheet({
     const sig = `${spanStart}|${spanEnd}`;
     if (sig !== lastSpan.current) { lastSpan.current = sig; setFrom(spanStart); setTo(spanEnd); }
   }, [spanStart, spanEnd]);
+
+  const focusMonth = focusDateKey?.slice(0, 7) ?? null;
+  useEffect(() => {
+    if (!focusMonth || !spanStart || !spanEnd) return;
+    const start = `${focusMonth}-01`;
+    const end = endOfMonth(focusMonth);
+    setFrom(start < spanStart ? spanStart : start);
+    setTo(end > spanEnd ? spanEnd : end);
+  }, [focusMonth, focusToken, spanStart, spanEnd]);
 
   // ── columns within the window — EVERY populated date in [from,to], scrolled horizontally. The most
   // recent COLUMN_RENDER_CAP are rendered (newest on the right); older ones are reported off-screen
@@ -290,11 +312,14 @@ export function FhirFlowsheet({
               <th className={`${STICKY_FREEZE} ${NAME_COL} bg-surface-dim py-1.5 pl-3 pr-3 text-left align-bottom font-normal`}>
                 <span className="mono text-[0.6rem] uppercase tracking-wider text-ink-faint">{noun}</span>
               </th>
-              {visibleDates.map(dateKey => (
-                <th key={dateKey} className="border-l border-hairline bg-surface-dim px-2 py-1.5 text-center align-bottom font-normal">
+              {visibleDates.map(dateKey => {
+                const focused = focusMonth && dateKey.slice(0, 7) === focusMonth;
+                return (
+                <th key={dateKey} className={`border-l border-hairline px-2 py-1.5 text-center align-bottom font-normal ${focused ? 'bg-ok-soft text-ok shadow-[inset_0_-2px_0_#1a6b4a]' : 'bg-surface-dim'}`}>
                   <span className="mono whitespace-nowrap text-[0.62rem] text-ink-mid">{shortDate(dateKey)}</span>
                 </th>
-              ))}
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -398,13 +423,14 @@ export function FhirFlowsheet({
                   {visibleDates.map(dateKey => {
                     const value = row.cells[dateKey];
                     const populated = value !== undefined;
+                    const focused = focusMonth && dateKey.slice(0, 7) === focusMonth;
                     return (
                       <td
                         key={dateKey}
                         // Marks this cell as a hover-card ANCHOR so the card's pointer-down-outside
                         // dismissal (use-hover-card) treats a click on the cell as "inside", not "close".
                         {...(populated ? { 'data-hovercard-anchor': '' } : {})}
-                        className={`truncate whitespace-nowrap border-l border-hairline px-2 py-1 text-center align-middle tabular-nums text-ink ${populated ? 'cursor-default' : ''}`}
+                        className={`truncate whitespace-nowrap border-l border-hairline px-2 py-1 text-center align-middle tabular-nums text-ink ${focused ? 'bg-ok-soft/55' : ''} ${populated ? 'cursor-default' : ''}`}
                         onPointerEnter={populated ? e => cellHover.scheduleOpen(buildCellDetail(row, dateKey, value), e.currentTarget.getBoundingClientRect()) : undefined}
                         onPointerLeave={populated ? () => cellHover.scheduleClose() : undefined}
                         onFocus={populated ? e => cellHover.openNow(buildCellDetail(row, dateKey, value), e.currentTarget.getBoundingClientRect()) : undefined}

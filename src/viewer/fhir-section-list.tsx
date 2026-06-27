@@ -21,11 +21,15 @@ export function FhirSectionList({
   title,
   emptyLabel,
   spec,
+  focusDateKey,
+  focusToken,
 }: {
   rows: FhirListRow[];
   title: string;
   emptyLabel: string;
   spec: SectionColumns;
+  focusDateKey?: string | null;
+  focusToken?: number;
 }) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortState>(spec.defaultSort);
@@ -50,6 +54,10 @@ export function FhirSectionList({
         sort={sort}
         onSort={onSort}
         getRowKey={row => row.codeKey}
+        getRowDate={row => row.lastDate}
+        getRowDates={row => row.occurrences.map(occurrence => occurrence.date)}
+        focusDateKey={focusDateKey}
+        focusToken={focusToken}
         renderDetail={renderRowDetail}
         emptyLabel={query ? 'No matches.' : emptyLabel}
       />

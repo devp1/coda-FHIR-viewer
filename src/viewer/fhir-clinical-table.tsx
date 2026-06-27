@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useId, useState, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 
 /**
  * Dense columnar clinical table — the shared "this feels like a real EHR" primitive. Grounded in
@@ -58,6 +58,10 @@ export function ClinicalTable<Row>({
   sort,
   onSort,
   getRowKey,
+  getRowDate,
+  getRowDates,
+  focusDateKey,
+  focusToken,
   renderDetail,
   emptyLabel,
 }: {
@@ -70,6 +74,12 @@ export function ClinicalTable<Row>({
   onSort: (key: string) => void;
   /** STABLE row key — open-state keys on this (never the render index), so a re-sort can't desync. */
   getRowKey: (row: Row) => string;
+  /** Optional timeline anchor date. Rows in the selected month get a focus tint and scroll target. */
+  getRowDate?: (row: Row) => string | null;
+  /** Optional multi-date anchor for mechanically deduped rows that retain per-resource occurrences. */
+  getRowDates?: (row: Row) => Array<string | null>;
+  focusDateKey?: string | null;
+  focusToken?: number;
   /** Disclosed detail for an expanded row. Omit to make rows non-expandable (e.g. Social). */
   renderDetail?: (row: Row) => ReactNode;
   emptyLabel: string;
@@ -78,8 +88,28 @@ export function ClinicalTable<Row>({
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const detailBaseId = useId();
+  const tableRef = useRef<HTMLTableElement | null>(null);
   const expandable = typeof renderDetail === 'function';
   const colSpan = columns.length;
+  const focusMonth = focusDateKey?.slice(0, 7) ?? null;
+  const rowDates = useCallback((row: Row): Array<string | null> => getRowDates?.(row) ?? [getRowDate?.(row) ?? null], [getRowDate, getRowDates]);
+  const rowMatchesFocus = useCallback((row: Row): boolean => Boolean(focusMonth && rowDates(row).some(date => date?.slice(0, 7) === focusMonth)), [focusMonth, rowDates]);
+
+  useEffect(() => {
+    if (!focusMonth || (!getRowDate && !getRowDates)) return;
+    if (
+      !showAll &&
+      rows.length > PAGE_CAP &&
+      rows.slice(PAGE_CAP).some(rowMatchesFocus)
+    ) {
+      setShowAll(true);
+      return;
+    }
+    const el = tableRef.current?.querySelector<HTMLElement>('[data-entry-focus="true"]');
+    if (!el) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    window.requestAnimationFrame(() => el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' }));
+  }, [focusMonth, focusToken, showAll]);
 
   if (rows.length === 0) {
     return <p className="px-3 py-3 text-[0.8rem] text-ink-faint">{emptyLabel}</p>;
@@ -90,7 +120,7 @@ export function ClinicalTable<Row>({
 
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full border-collapse text-[0.74rem]">
+      <table ref={tableRef} className="min-w-full border-collapse text-[0.74rem]">
         <thead className="sticky top-0 z-10">
           <tr className="border-b border-hairline bg-surface-dim">
             {columns.map(col => {
@@ -126,6 +156,8 @@ export function ClinicalTable<Row>({
             const isOpen = openKey === key;
             const zebra = i % 2 === 1; // visual alternation by render position (Carbon useZebraStyles).
             const rowBg = zebra ? 'bg-[#FAFAF8]' : 'bg-surface';
+            const rowDate = getRowDate?.(row) ?? null;
+            const focused = rowMatchesFocus(row);
             const detailId = `${detailBaseId}-${key}`;
             const toggle = () => setOpenKey(o => (o === key ? null : key));
             // MOUSE-only convenience so any cell (incl. far edge) toggles; bails on the first-cell
@@ -140,7 +172,9 @@ export function ClinicalTable<Row>({
               <Fragment key={key}>
                 <tr
                   onClick={onRowClick}
-                  className={`${rowBg} ${expandable ? 'cursor-pointer hover:bg-surface-dim focus-within:outline focus-within:outline-2 focus-within:-outline-offset-2 focus-within:outline-ok' : ''}`}
+                  data-entry-date={rowDate ?? undefined}
+                  data-entry-focus={focused ? 'true' : undefined}
+                  className={`${focused ? 'bg-ok-soft/60 shadow-[inset_3px_0_0_#1a6b4a]' : rowBg} ${expandable ? 'cursor-pointer hover:bg-surface-dim focus-within:outline focus-within:outline-2 focus-within:-outline-offset-2 focus-within:outline-ok' : ''}`}
                 >
                   {columns.map((col, ci) => {
                     const cell = col.render(row);

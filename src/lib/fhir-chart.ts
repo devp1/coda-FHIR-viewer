@@ -61,6 +61,8 @@ export type FhirListRow = {
   code: string | null;
   /** Most-recent clinically-relevant date for this code (ISO string as found), or null. */
   lastDate: string | null;
+  /** Per-resource occurrence dates retained for chronology; undated occurrences remain null. */
+  occurrences: Array<{ date: string | null; label: string; detail: string | null }>;
   /** How many raw resources collapsed into this row. */
   count: number;
   /** Short verbatim detail line shown on the summary row (status/sig from the latest instance). */
@@ -89,16 +91,36 @@ export type FhirFlowsheetRow = {
   numeric: Array<{ dateKey: string; value: number | null }>;
 };
 
+export type FhirMeasurementEventItem = {
+  label: string;
+  codeKey: string;
+  value: string;
+  unit: string | null;
+  labGroup?: FhirLabGroup | null;
+};
+
+export type FhirMeasurementEvent = {
+  /** Observation effective/issued date carried verbatim; timeline consumers may day-bucket it. */
+  date: string | null;
+  /** Parent Observation label, verbatim. Component values remain in `items`. */
+  label: string;
+  items: FhirMeasurementEventItem[];
+};
+
 export type FhirFlowsheet = {
   /** Sorted ascending — chronological, recent on the right. Full effective timestamps. */
   dateKeys: string[];
   rows: FhirFlowsheetRow[];
+  /** One valued Observation occurrence per record, preserving chronology without inferring from cells. */
+  events: FhirMeasurementEvent[];
 };
 
 export type FhirNote = {
   /** Verbatim type label (DocumentReference.type.text ?? coding display). */
   typeLabel: string;
   date: string | null;
+  /** Verbatim DocumentReference.author display/reference list, if present. */
+  author: string | null;
   /** Decoded note body (base64 `content[].attachment.data` decoded), or plain text if present. */
   body: string;
   /** Verbatim secondary metadata, surfaced in the expandable detail (null when absent). */
@@ -356,6 +378,7 @@ type ListAccumulator = {
   codeKey: string;
   code: string | null;
   lastDate: string | null;
+  occurrences: Array<{ date: string | null; label: string; detail: string | null }>;
   count: number;
   detail: string | null;
   fields: FhirField[];
@@ -401,6 +424,7 @@ function dedupeList(
         codeKey,
         code: rawCodeOf(e.concept),
         lastDate: e.date,
+        occurrences: [{ date: e.date, label: labelOf(e.concept), detail: e.detail }],
         count: 1,
         detail: e.detail,
         fields: e.fields,
@@ -408,6 +432,7 @@ function dedupeList(
       continue;
     }
     existing.count += 1;
+    existing.occurrences.push({ date: e.date, label: labelOf(e.concept), detail: e.detail });
     // Refresh the displayed label/detail/fields from the incoming instance when it is the new
     // "latest" (dated beats undated; equal/later dated refreshes; undated-vs-undated → input order).
     // Detail/fields are taken verbatim from that winning instance — never a new date with stale data.
@@ -431,6 +456,12 @@ function toRows(acc: ListAccumulator[]): FhirListRow[] {
     codeKey: a.codeKey,
     code: a.code,
     lastDate: a.lastDate,
+    occurrences: a.occurrences.slice().sort((x, y) => {
+      if (x.date && y.date) return x.date > y.date ? -1 : x.date < y.date ? 1 : x.label.localeCompare(y.label);
+      if (x.date) return -1;
+      if (y.date) return 1;
+      return x.label.localeCompare(y.label);
+    }),
     count: a.count,
     detail: a.detail,
     fields: a.fields,
@@ -558,6 +589,7 @@ function buildFlowsheet(
   options: { resolveGroup?: (codeKey: string, label: string) => FhirLabGroup | null } = {},
 ): { flowsheet: FhirFlowsheet; skipped: number } {
   const rows = new Map<string, FlowsheetAccumulator>();
+  const events: FhirMeasurementEvent[] = [];
   // Map a column key → its sort token. A collision suffix sorts immediately AFTER its base timestamp
   // (and before the next distinct timestamp) — fixing the old lexicographic "#10 before #2" bug and
   // the "#n before next-second" bug. Token = `${base}\u0000${paddedN}` so string compare is correct.
@@ -567,7 +599,7 @@ function buildFlowsheet(
     concept: unknown,
     dateKey: string,
     rendered: { text: string; unit: string | null; numeric: number | null },
-  ) => {
+  ): FhirMeasurementEventItem => {
     const codeKey = codeKeyOf(concept);
     const label = labelOf(concept);
     const labGroup = options.resolveGroup?.(codeKey, label) ?? null;
@@ -595,8 +627,9 @@ function buildFlowsheet(
       while (`${dateKey}·${n}` in row.cells) n += 1;
       key = `${dateKey}·${n}`;
     } else if (key in row.cells) {
-      // identical repeat — nothing to do.
-      return;
+      // Identical repeat — the matrix cell is already represented, but the source Observation still
+      // remains an event for chronology/counting.
+      return { label, codeKey, value: cellText, unit: rendered.unit, labGroup };
     }
     row.cells[key] = cellText;
     row.numeric[key] = rendered.numeric;
@@ -604,6 +637,7 @@ function buildFlowsheet(
     // Sort token: base timestamp, then a NUL separator + zero-padded collision index, so "·2" sorts
     // right after the base and "·10" after "·2", all before the next distinct timestamp.
     sortToken.set(key, `${dateKey}\u0000${String(n).padStart(6, '0')}`);
+    return { label, codeKey, value: cellText, unit: rendered.unit, labGroup };
   };
 
   let skipped = 0; // categorized observations that surfaced NO cell (no value[x], no valued component)
@@ -612,6 +646,7 @@ function buildFlowsheet(
     const components = (obs as { component?: unknown }).component;
     const parentRendered = renderValue(obs);
     let placedAny = false;
+    const eventItems: FhirMeasurementEventItem[] = [];
     if (Array.isArray(components) && components.length > 0) {
       // Multi-component (e.g. blood pressure systolic/diastolic) — one row per component, verbatim.
       // A component with no code falls back to its own label (and is disambiguated by the collision
@@ -619,17 +654,20 @@ function buildFlowsheet(
       for (const comp of components as Array<{ code?: unknown }>) {
         const rendered = renderValue(comp as FhirResource);
         if (!rendered) continue;
-        place((comp as { code?: unknown }).code ?? (obs as { code?: unknown }).code, dateKey, rendered);
+        eventItems.push(place((comp as { code?: unknown }).code ?? (obs as { code?: unknown }).code, dateKey, rendered));
         placedAny = true;
       }
       // A parent that ALSO carries its own value (e.g. mean) is kept too — never dropped.
       if (parentRendered) {
-        place((obs as { code?: unknown }).code, dateKey, parentRendered);
+        eventItems.push(place((obs as { code?: unknown }).code, dateKey, parentRendered));
         placedAny = true;
       }
     } else if (parentRendered) {
-      place((obs as { code?: unknown }).code, dateKey, parentRendered);
+      eventItems.push(place((obs as { code?: unknown }).code, dateKey, parentRendered));
       placedAny = true;
+    }
+    if (eventItems.length > 0) {
+      events.push({ date: dateKey, label: labelOf((obs as { code?: unknown }).code), items: eventItems });
     }
     if (!placedAny) skipped += 1; // counted into chart.unmapped by the caller — never silently lost.
   }
@@ -657,8 +695,13 @@ function buildFlowsheet(
   // as a display-only readability layer. Values/units/labels stay verbatim and unresolved rows remain
   // visible after the mapped catalog groups.
   outRows.sort(options.resolveGroup ? compareFhirLabRows : (a, b) => a.label.localeCompare(b.label));
+  events.sort((a, b) => {
+    const da = a.date ?? 'undated';
+    const db = b.date ?? 'undated';
+    return da.localeCompare(db) || a.label.localeCompare(b.label);
+  });
 
-  return { flowsheet: { dateKeys, rows: outRows }, skipped };
+  return { flowsheet: { dateKeys, rows: outRows, events }, skipped };
 }
 
 // ── notes (DocumentReference) ─────────────────────────────────────────────────────────────────────
@@ -709,7 +752,8 @@ function buildNotes(docRefs: FhirResource[]): FhirNote[] {
     const status = str(r.status as string);
     const docStatus = str(r.docStatus as string);
     const category = str(labelOf(r.category, '')) || null;
-    notes.push({ typeLabel, date, body, status, docStatus, category });
+    const author = renderFhirValue(r.author);
+    notes.push({ typeLabel, date, author, body, status, docStatus, category });
   }
   // Newest first; undated sink.
   notes.sort((a, b) => {

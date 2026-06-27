@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import type { FhirChart, FhirListRow, FhirNote, FhirSocialLine } from '../lib/fhir-chart';
+import { buildFhirTimelineEntries, firstNoteLine, noteSummaryLine, type FhirTimelineFamily } from '../lib/fhir-timeline';
 import { FhirCard, FhirListGroup, FhirListItem } from './fhir-card';
 import { ClinicalTable, type ColumnDef, type SortState } from './fhir-clinical-table';
 import { FhirFlowsheet } from './fhir-flowsheet';
@@ -9,6 +10,7 @@ import { CountChip, DateStamp } from './fhir-primitives';
 import { SectionShell } from './fhir-section';
 import { ALLERGY_COLUMNS, MEDICATION_COLUMNS, ORDER_COLUMNS, PROBLEM_COLUMNS } from './fhir-section-columns';
 import { FhirSectionList } from './fhir-section-list';
+import { FhirTimeline } from './fhir-timeline';
 
 /**
  * Compact EHR chart viewer for a raw FHIR export — a faithful React port of OpenEMR's patient chart,
@@ -24,6 +26,7 @@ import { FhirSectionList } from './fhir-section-list';
  */
 
 type SectionKey = 'dashboard' | 'allergies' | 'problems' | 'medications' | 'labs' | 'vitals' | 'orders' | 'notes' | 'social';
+type TimelineFocusRequest = { dateKey: string; token: number };
 
 /**
  * Derived display-only age (whole years) from a verbatim FHIR birthDate, e.g. "1952-03-04" → "74y".
@@ -68,6 +71,16 @@ export function FhirChartViewer({ chart }: { chart: FhirChart }) {
   }, [chart]);
 
   const [active, setActive] = useState<SectionKey>('dashboard');
+  const [timelineFocus, setTimelineFocus] = useState<TimelineFocusRequest | null>(null);
+  const timelineEntries = useMemo(() => buildFhirTimelineEntries(chart), [chart]);
+
+  const selectTimelineDate = (dateKey: string, family?: FhirTimelineFamily) => {
+    setTimelineFocus(prev => ({ dateKey, token: (prev?.token ?? 0) + 1 }));
+    const target = timelineSectionForFamily(family);
+    if (sections.some(section => section.key === target)) setActive(target);
+  };
+  const focusDateKey = timelineFocus?.dateKey ?? null;
+  const focusToken = timelineFocus?.token ?? 0;
 
   return (
     <div className="rounded-sm border border-hairline bg-surface">
@@ -85,6 +98,12 @@ export function FhirChartViewer({ chart }: { chart: FhirChart }) {
           {header.race && <IdentityField value={header.race} />}
         </dl>
       </header>
+
+      {timelineEntries.length > 0 && (
+        <div className="border-b border-hairline bg-surface-dim px-3 py-2">
+          <FhirTimeline entries={timelineEntries} onSelectDate={selectTimelineDate} />
+        </div>
+      )}
 
       {/* ── horizontal section navbar (PatientMenuRole.php:206-243) ───────────────────────────────
           Real OpenEMR renders these as plain sentence-case text links (~16px, weight 400, no
@@ -113,21 +132,21 @@ export function FhirChartViewer({ chart }: { chart: FhirChart }) {
       <div className="p-3">
         {active === 'dashboard' && <Dashboard chart={chart} onOpenSection={setActive} />}
         {active === 'allergies' && (
-          <FhirSectionList rows={chart.allergies} title="Allergies" emptyLabel="No allergies recorded." spec={ALLERGY_COLUMNS} />
+          <FhirSectionList rows={chart.allergies} title="Allergies" emptyLabel="No allergies recorded." spec={ALLERGY_COLUMNS} focusDateKey={focusDateKey} focusToken={focusToken} />
         )}
         {active === 'problems' && (
-          <FhirSectionList rows={chart.problems} title="Problems" emptyLabel="No problems recorded." spec={PROBLEM_COLUMNS} />
+          <FhirSectionList rows={chart.problems} title="Problems" emptyLabel="No problems recorded." spec={PROBLEM_COLUMNS} focusDateKey={focusDateKey} focusToken={focusToken} />
         )}
         {active === 'medications' && (
-          <FhirSectionList rows={chart.medications} title="Medications" emptyLabel="No medications recorded." spec={MEDICATION_COLUMNS} />
+          <FhirSectionList rows={chart.medications} title="Medications" emptyLabel="No medications recorded." spec={MEDICATION_COLUMNS} focusDateKey={focusDateKey} focusToken={focusToken} />
         )}
         {active === 'orders' && (
-          <FhirSectionList rows={chart.ordersAndProcedures} title="Orders & Procedures" emptyLabel="None recorded." spec={ORDER_COLUMNS} />
+          <FhirSectionList rows={chart.ordersAndProcedures} title="Orders & Procedures" emptyLabel="None recorded." spec={ORDER_COLUMNS} focusDateKey={focusDateKey} focusToken={focusToken} />
         )}
-        {active === 'labs' && <FhirFlowsheet flowsheet={chart.labs} noun="Lab result" grouping="labs" />}
-        {active === 'vitals' && <FhirFlowsheet flowsheet={chart.vitals} noun="Vital" />}
-        {active === 'notes' && <NotesFull notes={chart.notes} />}
-        {active === 'social' && <SocialFull chart={chart} />}
+        {active === 'labs' && <FhirFlowsheet flowsheet={chart.labs} noun="Lab result" grouping="labs" focusDateKey={focusDateKey} focusToken={focusToken} />}
+        {active === 'vitals' && <FhirFlowsheet flowsheet={chart.vitals} noun="Vital" focusDateKey={focusDateKey} focusToken={focusToken} />}
+        {active === 'notes' && <NotesFull notes={chart.notes} focusDateKey={focusDateKey} focusToken={focusToken} />}
+        {active === 'social' && <SocialFull chart={chart} focusDateKey={focusDateKey} focusToken={focusToken} />}
       </div>
 
       {Object.keys(chart.unmapped).length > 0 && active === 'dashboard' && (
@@ -137,6 +156,18 @@ export function FhirChartViewer({ chart }: { chart: FhirChart }) {
       )}
     </div>
   );
+}
+
+function timelineSectionForFamily(family?: FhirTimelineFamily): SectionKey {
+  if (family === 'problems') return 'problems';
+  if (family === 'allergies') return 'allergies';
+  if (family === 'medications') return 'medications';
+  if (family === 'labs') return 'labs';
+  if (family === 'vitals') return 'vitals';
+  if (family === 'orders') return 'orders';
+  if (family === 'notes') return 'notes';
+  if (family === 'social') return 'social';
+  return 'dashboard';
 }
 
 /* ── Dashboard: OpenEMR masonry card grid (templates/patient/dashboard.html.twig) ─────────────────── */
@@ -188,7 +219,7 @@ function Dashboard({ chart, onOpenSection }: { chart: FhirChart; onOpenSection: 
   if (chart.notes.length > 0)
     cards.push(
       <FhirCard key="notes" title="Notes" count={chart.notes.length}>
-        <OpenSectionLink label="Open notes →" onClick={() => onOpenSection('notes')} />
+        <NoteSummaryList notes={chart.notes} limit={6} onMore={() => onOpenSection('notes')} />
       </FhirCard>,
     );
 
@@ -198,6 +229,26 @@ function Dashboard({ chart, onOpenSection }: { chart: FhirChart; onOpenSection: 
     <div className="columns-1 gap-3 md:columns-2 xl:columns-3 [&>*]:mb-3 [&>*]:break-inside-avoid">
       {cards}
     </div>
+  );
+}
+
+function NoteSummaryList({ notes, limit, onMore }: { notes: FhirNote[]; limit: number; onMore: () => void }) {
+  const shown = notes.slice(0, limit);
+  return (
+    <>
+      <FhirListGroup>
+        {shown.map((note, i) => (
+          <FhirListItem
+            key={`${note.date ?? 'undated'}-${note.typeLabel}-${i}`}
+            title={noteSummaryLine(note)}
+            meta={note.author ? `Author: ${note.author}` : undefined}
+            right={note.date ? <DateStamp value={note.date} /> : undefined}
+            zebra={i % 2 === 1}
+          />
+        ))}
+      </FhirListGroup>
+      {notes.length > limit && <OpenSectionLink label={`Show all ${notes.length} →`} onClick={onMore} />}
+    </>
   );
 }
 
@@ -278,11 +329,21 @@ function dateCompare<T>(get: (t: T) => string | null, label: (t: T) => string, d
 type NoteRow = FhirNote & { key: string };
 
 const NOTE_COLUMNS: ColumnDef<NoteRow>[] = [
-  { key: 'document', label: 'Document', render: r => <span className="break-words text-ink">{r.typeLabel}</span>, sortable: true },
+  {
+    key: 'document',
+    label: 'Document',
+    render: r => (
+      <span className="min-w-0">
+        <span className="block break-words text-ink">{r.typeLabel}</span>
+        {firstNoteLine(r) && <span className="block truncate text-ink-mid">{firstNoteLine(r)}</span>}
+      </span>
+    ),
+    sortable: true,
+  },
   { key: 'date', label: 'Date', align: 'right', render: r => (r.date ? <DateStamp value={r.date} /> : <span className="text-ink-faint">{DASH}</span>), sortable: true },
 ];
 
-function NotesFull({ notes }: { notes: FhirNote[] }) {
+function NotesFull({ notes, focusDateKey, focusToken }: { notes: FhirNote[]; focusDateKey?: string | null; focusToken?: number }) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortState>({ key: 'date', dir: 'desc' });
 
@@ -292,7 +353,7 @@ function NotesFull({ notes }: { notes: FhirNote[] }) {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return rows;
-    return rows.filter(r => r.typeLabel.toLowerCase().includes(q) || r.body.toLowerCase().includes(q));
+    return rows.filter(r => r.typeLabel.toLowerCase().includes(q) || r.body.toLowerCase().includes(q) || (r.author ?? '').toLowerCase().includes(q));
   }, [rows, query]);
 
   const sorted = useMemo(() => {
@@ -311,10 +372,14 @@ function NotesFull({ notes }: { notes: FhirNote[] }) {
         sort={sort}
         onSort={key => setSort(s => nextSort(s, key, key === 'date' ? 'desc' : 'asc'))}
         getRowKey={r => r.key}
+        getRowDate={r => r.date}
+        focusDateKey={focusDateKey}
+        focusToken={focusToken}
         renderDetail={r => (
           <div className="space-y-2">
-            {(r.status || r.docStatus || r.category) && (
+            {(r.status || r.docStatus || r.category || r.author) && (
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+                {r.author && (<><span className="mono whitespace-nowrap text-ink-faint">Author</span><span className="text-ink">{r.author}</span></>)}
                 {r.status && (<><span className="mono whitespace-nowrap text-ink-faint">Status</span><span className="text-ink">{r.status}</span></>)}
                 {r.docStatus && (<><span className="mono whitespace-nowrap text-ink-faint">Doc status</span><span className="text-ink">{r.docStatus}</span></>)}
                 {r.category && (<><span className="mono whitespace-nowrap text-ink-faint">Category</span><span className="text-ink">{r.category}</span></>)}
@@ -341,7 +406,7 @@ const SOCIAL_COLUMNS: ColumnDef<SocialRow>[] = [
   { key: 'recorded', label: 'Recorded', align: 'right', render: r => (r.date ? <DateStamp value={r.date} /> : <span className="text-ink-faint">{DASH}</span>), sortable: true },
 ];
 
-function SocialFull({ chart }: { chart: FhirChart }) {
+function SocialFull({ chart, focusDateKey, focusToken }: { chart: FhirChart; focusDateKey?: string | null; focusToken?: number }) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortState>({ key: 'recorded', dir: 'desc' });
 
@@ -368,6 +433,9 @@ function SocialFull({ chart }: { chart: FhirChart }) {
         sort={sort}
         onSort={key => setSort(s => nextSort(s, key, key === 'recorded' ? 'desc' : 'asc'))}
         getRowKey={r => r.key}
+        getRowDate={r => r.date}
+        focusDateKey={focusDateKey}
+        focusToken={focusToken}
         emptyLabel={query ? 'No matches.' : 'No social history recorded.'}
       />
     </SectionShell>
