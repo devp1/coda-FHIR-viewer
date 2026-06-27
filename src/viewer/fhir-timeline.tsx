@@ -138,7 +138,6 @@ function TimelineSwimlanes({
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [laneWidth, setLaneWidth] = useState(0);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
-  const [scrubKey, setScrubKey] = useState<string | null>(null);
   const [modalKey, setModalKey] = useState<string | null>(null);
   const visibleFamilies = useMemo(
     () => FHIR_TIMELINE_FAMILIES.filter(family => columns.some(col => col.entries.some(entry => entry.family === family))),
@@ -164,7 +163,7 @@ function TimelineSwimlanes({
     if (el) el.scrollLeft = el.scrollWidth;
   }, [track.width, laneWidth, pack.scroll, pack.scrollWidth]);
 
-  const activeKey = hoverKey ?? scrubKey ?? null;
+  const activeKey = hoverKey;
   const selected = activeKey ? columns.find(col => col.dateKey === activeKey) ?? null : null;
   const xPx = useCallback((monthKey: string) => track.xByKey.get(monthKey.slice(0, 7)) ?? -1, [track]);
   const frac = useCallback((x: number): string => {
@@ -189,19 +188,7 @@ function TimelineSwimlanes({
     };
   }, [columns]);
 
-  const moveScrub = useCallback((delta: number) => {
-    setHoverKey(null);
-    setScrubKey(prev => {
-      const keys = columns.map(col => col.dateKey);
-      const base = prev ?? keys[keys.length - 1];
-      const idx = Math.max(0, keys.indexOf(base));
-      const next = keys[Math.min(keys.length - 1, Math.max(0, idx + delta))];
-      return next ?? null;
-    });
-  }, [columns]);
-
   const openDate = useCallback((key: string) => {
-    setScrubKey(null);
     setHoverKey(key);
     setModalKey(key);
   }, []);
@@ -234,9 +221,7 @@ function TimelineSwimlanes({
           onMouseLeave={() => setHoverKey(null)}
           onBlur={() => setHoverKey(null)}
           onKeyDown={event => {
-            if (event.key === 'ArrowLeft') { event.preventDefault(); moveScrub(-1); }
-            if (event.key === 'ArrowRight') { event.preventDefault(); moveScrub(1); }
-            if (event.key === 'Escape') { event.preventDefault(); setHoverKey(null); setScrubKey(null); }
+            if (event.key === 'Escape') { event.preventDefault(); setHoverKey(null); }
           }}
         >
           <div className="relative w-full" style={pack.scroll ? { minWidth: pack.scrollWidth } : undefined}>
@@ -282,9 +267,6 @@ function TimelineSwimlanes({
       <Readout
         column={selected}
         summary={restSummary}
-        onScrubPrev={() => moveScrub(-1)}
-        onScrubNext={() => moveScrub(1)}
-        onExpand={selected ? () => openDate(selected.dateKey) : undefined}
       />
       {modalColumn && (
         <DatePreviewModal
@@ -314,7 +296,7 @@ function TimeAxis({ track, frac, selected, labelsFit }: { track: Track; frac: (x
         <div
           className="mono pointer-events-none absolute top-0 -translate-x-1/2 whitespace-nowrap rounded-sm bg-surface px-1 text-[0.52rem] font-medium tracking-wider text-ink"
           style={{ left: frac(track.xByKey.get(selected.dateKey) ?? -1) }}
-          data-testid="fhir-timeline-scrub-date"
+          data-testid="fhir-timeline-active-date"
         >
           {selected.dateLabel}
         </div>
@@ -354,41 +336,18 @@ function TimeAxis({ track, frac, selected, labelsFit }: { track: Track; frac: (x
 function Readout({
   column,
   summary,
-  onScrubPrev,
-  onScrubNext,
-  onExpand,
 }: {
   column: FhirTimelineColumn | null;
   summary: { datedCount: number; entryTotal: number; tally: Array<{ family: FhirTimelineFamily; count: number }> };
-  onScrubPrev: () => void;
-  onScrubNext: () => void;
-  onExpand?: () => void;
 }) {
   return (
     <div className="flex min-h-[206px] min-w-0 flex-col overflow-hidden border-t border-hairline bg-surface-dim px-3 py-2.5 md:border-l md:border-t-0" data-testid="fhir-timeline-readout">
-      <div className="flex items-center gap-1">
-        <button type="button" onClick={onScrubPrev} className="mono rounded-sm border border-hairline bg-surface px-1.5 py-0.5 text-[0.58rem] text-ink-mid hover:border-ok hover:text-ok" aria-label="Scrub to older month">‹</button>
-        <button type="button" onClick={onScrubNext} className="mono rounded-sm border border-hairline bg-surface px-1.5 py-0.5 text-[0.58rem] text-ink-mid hover:border-ok hover:text-ok" aria-label="Scrub to newer month">›</button>
-      </div>
       {column ? (
         <>
-          <div className="mt-2">
-            <div className="flex items-baseline justify-between gap-2">
-              <div className="min-w-0">
-                <div className="mono text-[0.5rem] uppercase tracking-widest text-ink-light">Preview</div>
-                <div className="text-[0.95rem] text-ink">{column.dateLabel}</div>
-              </div>
-              {onExpand && (
-                <button
-                  type="button"
-                  onClick={onExpand}
-                  data-testid="fhir-timeline-expand"
-                  aria-label="Open full preview"
-                  className="mono shrink-0 rounded-full border border-hairline-strong px-2.5 py-1 text-[0.58rem] uppercase tracking-wider text-ink-mid transition-colors hover:border-ok hover:text-ok"
-                >
-                  Expand
-                </button>
-              )}
+          <div>
+            <div className="min-w-0">
+              <div className="mono text-[0.5rem] uppercase tracking-widest text-ink-light">Preview</div>
+              <div className="text-[0.95rem] text-ink">{column.dateLabel}</div>
             </div>
           </div>
           <div className="mt-1.5 min-h-0 space-y-1 overflow-hidden">
@@ -405,7 +364,7 @@ function Readout({
         </>
       ) : (
         <>
-          <div className="mono mt-2 text-[0.5rem] uppercase tracking-widest text-ink-light">Chart</div>
+          <div className="mono text-[0.5rem] uppercase tracking-widest text-ink-light">Chart</div>
           <div className="text-[0.8rem] leading-snug text-ink-mid">
             {summary.datedCount} {summary.datedCount === 1 ? 'chart month' : 'chart months'} · {summary.entryTotal} {summary.entryTotal === 1 ? 'dated item' : 'dated items'}
           </div>
