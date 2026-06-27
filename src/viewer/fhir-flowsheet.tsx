@@ -14,17 +14,19 @@ import {
 } from './fhir-trend';
 import { FilterInput } from './fhir-primitives';
 import { computeColumnLayout, DATE_COL_FLOOR_PX } from './fhir-flowsheet-layout';
+import { buildLabFlowsheetDisplayRows, type FhirFlowsheetDisplayRow } from './fhir-flowsheet-rows';
 
 /** Rows rendered outside the viewport buffer are virtualized away for performance. */
 const ROW_PX = 30;
 const OVERSCAN = 12;
-const NAME_COL = 'w-[16rem] min-w-[16rem] max-w-[16rem]';
+const NAME_COL = 'w-[20rem] min-w-[20rem] max-w-[20rem]';
 // The pure column-layout math (fill-then-scroll even-tiling invariant) lives in a separate module so it
 // can be unit-tested without React/DOM — see fhir-flowsheet-layout.ts + tests/fhir-viewer-flowsheet-layout.test.ts.
 /** Hard ceiling on rendered date columns so a huge window can't lock the browser (older off-screen). */
 const COLUMN_RENDER_CAP = 120;
 // Opaque frozen-name column with an inset divider — copied technique from the signed grid.
 const STICKY_FREEZE = 'sticky left-0 z-20 shadow-[inset_-1px_0_0_0_rgba(0,0,0,0.12)]';
+const GROUP_CHIP = 'mono inline-flex h-5 shrink-0 items-center justify-center rounded-full border px-2 text-[0.55rem] font-medium uppercase leading-none tracking-wider';
 
 /** YYYY-MM-DD of a flowsheet column key (undated → ''). */
 function dayOf(dateKey: string): string {
@@ -36,14 +38,24 @@ function dayOf(dateKey: string): string {
  * REAL trend copied from the signed grid: hover a populated row → an inline sparkline in the name
  * cell; click it → the real trend modal. NO reference ranges, NO High/Low (absent in FHIR exports).
  *
- * Columns = the COLUMN_CAP most-populated dates; rows with no value in those dates are hidden;
- * analytes alphabetical. The trend is computed from the analyte's FULL history (every date), not the
- * visible window.
+ * Columns = the COLUMN_CAP most-populated dates; rows with no value in those dates are hidden. Flat
+ * vitals keep model order; labs can render category/family headers over the model's catalog order.
+ * The trend is computed from the analyte's FULL history (every date), not the visible window.
  */
-export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; noun: 'Lab result' | 'Vital' }) {
+export function FhirFlowsheet({
+  flowsheet,
+  noun,
+  grouping,
+}: {
+  flowsheet: FhirFlowsheet;
+  noun: 'Lab result' | 'Vital';
+  grouping?: 'labs';
+}) {
   const [query, setQuery] = useState('');
   const [trendKey, setTrendKey] = useState<string | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [collapsedCategoryIds, setCollapsedCategoryIds] = useState<string[]>([]);
+  const [collapsedFamilyIds, setCollapsedFamilyIds] = useState<string[]>([]);
   // Per-cell hover detail card (value · unit · date · delta-vs-prior), ported from the signed grid.
   const cellHover = useHoverCard<FhirCellDetail>();
 
@@ -75,15 +87,36 @@ export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; n
   const visibleDates = windowDates.length > COLUMN_RENDER_CAP ? windowDates.slice(windowDates.length - COLUMN_RENDER_CAP) : windowDates;
   const hiddenOlder = windowDates.length - visibleDates.length;
 
-  // Rows: alphabetical, present in ≥1 visible column, matching the search.
-  const rows = useMemo(() => {
+  // Data rows: ordered by the model (alphabetical for flat vitals, catalog order for labs), present in
+  // >=1 visible column, matching the search. Category/family headers are built after this filter.
+  const dataRows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return flowsheet.rows.filter(r => {
       if (!visibleDates.some(k => r.cells[k] !== undefined)) return false;
-      if (q && !r.label.toLowerCase().includes(q) && !(r.unit ?? '').toLowerCase().includes(q)) return false;
+      if (q) {
+        const searchable = [
+          r.label,
+          r.unit ?? '',
+          r.labGroup?.categoryLabel ?? '',
+          r.labGroup?.familyLabel ?? '',
+          grouping === 'labs' && !r.labGroup ? 'Other labs unmapped' : '',
+        ].join(' ').toLowerCase();
+        if (!searchable.includes(q)) return false;
+      }
       return true;
     });
-  }, [flowsheet.rows, visibleDates, query]);
+  }, [flowsheet.rows, grouping, visibleDates, query]);
+
+  const groupedLabs = grouping === 'labs';
+  const forceOpenGroups = groupedLabs && query.trim().length > 0;
+  const displayRows = useMemo<FhirFlowsheetDisplayRow[]>(
+    () => groupedLabs
+      ? buildLabFlowsheetDisplayRows(dataRows, collapsedCategoryIds, collapsedFamilyIds, forceOpenGroups)
+      : dataRows.map(row => ({ kind: 'data' as const, key: row.codeKey, row })),
+    [collapsedCategoryIds, collapsedFamilyIds, dataRows, forceOpenGroups, groupedLabs],
+  );
+  const toggleCategory = (id: string) => setCollapsedCategoryIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleFamily = (id: string) => setCollapsedFamilyIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   // ── trend rows (full history per analyte) for the inline sparkline + modal ──────────────────────
   const trendByKey = useMemo(() => {
@@ -156,14 +189,23 @@ export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; n
     const el = scrollRef.current;
     if (el) el.scrollLeft = el.scrollWidth;
   }, [colCount, from, to]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const maxTop = Math.max(0, displayRows.length * ROW_PX - viewportH);
+    if (el.scrollTop > maxTop) {
+      el.scrollTop = maxTop;
+      setScrollTop(maxTop);
+    }
+  }, [displayRows.length, viewportH]);
   const startIdx = Math.max(0, Math.floor(scrollTop / ROW_PX) - OVERSCAN);
-  const endIdx = Math.min(rows.length, Math.ceil((scrollTop + viewportH) / ROW_PX) + OVERSCAN);
+  const endIdx = Math.min(displayRows.length, Math.ceil((scrollTop + viewportH) / ROW_PX) + OVERSCAN);
   const padTop = startIdx * ROW_PX;
-  const padBottom = (rows.length - endIdx) * ROW_PX;
-  const slice = rows.slice(startIdx, endIdx);
+  const padBottom = (displayRows.length - endIdx) * ROW_PX;
+  const slice = displayRows.slice(startIdx, endIdx);
 
   // trend modal navigation (prev/next over the trend-capable rows in display order)
-  const trendRows = useMemo(() => rows.filter(r => trendByKey.has(r.codeKey)), [rows, trendByKey]);
+  const trendRows = useMemo(() => dataRows.filter(r => trendByKey.has(r.codeKey)), [dataRows, trendByKey]);
   const trendIdx = trendKey ? trendRows.findIndex(r => r.codeKey === trendKey) : -1;
   const activeTrend = trendKey ? trendByKey.get(trendKey) ?? null : null;
 
@@ -176,8 +218,8 @@ export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; n
       {/* header: count · date-window (from → to) · search (no duplicate title, no DRAWN) */}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-hairline bg-surface-dim px-3 py-2">
         <span className="mono text-[0.62rem] uppercase tracking-wider text-ink-faint">
-          {rows.length.toLocaleString()}
-          {rows.length !== flowsheet.rows.length ? ` of ${flowsheet.rows.length.toLocaleString()}` : ''} analytes ·{' '}
+          {dataRows.length.toLocaleString()}
+          {dataRows.length !== flowsheet.rows.length ? ` of ${flowsheet.rows.length.toLocaleString()}` : ''} analytes ·{' '}
           {windowDates.length.toLocaleString()} date{windowDates.length === 1 ? '' : 's'} in window
           {hiddenOlder > 0 ? ` · ${hiddenOlder} oldest hidden — narrow the date window to view` : ''}
         </span>
@@ -257,11 +299,75 @@ export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; n
           </thead>
           <tbody>
             {padTop > 0 && <tr style={{ height: padTop }}><td colSpan={1 + visibleDates.length} /></tr>}
-            {slice.map((row, i) => {
+            {slice.map((displayRow, i) => {
+              if (displayRow.kind !== 'data') {
+                const isCategory = displayRow.kind === 'category';
+                const toggle = () => (isCategory ? toggleCategory(displayRow.id) : toggleFamily(displayRow.id));
+                const bg = isCategory ? 'bg-ok-soft/35' : 'bg-surface';
+                const rowLabel = isCategory && !displayRow.mapped ? 'unmapped' : isCategory ? 'category' : 'family';
+                const resultLabel = displayRow.count === 1 ? 'result' : 'results';
+                const border = isCategory ? 'border-ok/45' : 'border-hairline-strong';
+                const frozenRail = isCategory
+                  ? 'sticky left-0 z-30 shadow-[inset_5px_0_0_0_#1a6b4a,inset_-1px_0_0_0_rgba(0,0,0,0.12)]'
+                  : 'sticky left-0 z-20 shadow-[inset_31px_0_0_-28px_rgba(26,107,74,0.42),inset_-1px_0_0_0_rgba(0,0,0,0.12)]';
+                const chipTone = isCategory
+                  ? 'border-ok/50 bg-surface text-ok'
+                  : 'border-info/35 bg-surface text-info';
+                return (
+                  <tr
+                    key={displayRow.key}
+                    className={`border-b ${border} ${bg} ${isCategory ? 'border-t border-t-ok/25' : ''}`}
+                    style={{ height: ROW_PX }}
+                  >
+                    <th
+                      scope="row"
+                      className={`${frozenRail} ${NAME_COL} ${bg} ${isCategory ? 'pl-3' : 'pl-7'} cursor-pointer py-1 pr-2 text-left align-middle font-normal`}
+                      onClick={toggle}
+                    >
+                      <button
+                        type="button"
+                        onClick={event => { event.stopPropagation(); toggle(); }}
+                        aria-expanded={displayRow.expanded}
+                        aria-label={`${displayRow.label} ${rowLabel}, ${displayRow.count} ${resultLabel}`}
+                        className="group flex min-w-0 items-center gap-2 text-left transition-colors hover:text-ok"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`shrink-0 transition-transform ${displayRow.expanded ? 'rotate-90' : ''} ${isCategory ? 'text-ok' : 'text-ink-light'}`}
+                        >
+                          ›
+                        </span>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className={`truncate ${isCategory ? 'text-xs font-semibold text-ink' : 'text-[0.72rem] font-medium text-ink-mid'}`} title={displayRow.label}>
+                            {displayRow.label}
+                          </span>
+                          {isCategory ? (
+                            <>
+                              <span className={`${GROUP_CHIP} ${chipTone}`}>
+                                {rowLabel}
+                              </span>
+                              <span className={`${GROUP_CHIP} ${chipTone}`}>
+                                {displayRow.count} {resultLabel}
+                              </span>
+                            </>
+                          ) : (
+                            <span className={`${GROUP_CHIP} ${chipTone}`}>
+                              {displayRow.count} {resultLabel}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    </th>
+                    <td colSpan={visibleDates.length} className={`${bg} px-0 py-0 align-middle`} aria-hidden="true" />
+                  </tr>
+                );
+              }
+              const row = displayRow.row;
               const zebra = (startIdx + i) % 2 === 1;
               const rowBg = zebra ? 'bg-[#FAFAF8]' : 'bg-surface';
               const trend = trendByKey.get(row.codeKey);
               const showSpark = trend && hoverKey === row.codeKey;
+              const rowIndent = groupedLabs ? (row.labGroup ? 'pl-11' : 'pl-7') : 'pl-3';
               return (
                 <tr
                   key={row.codeKey}
@@ -270,7 +376,7 @@ export function FhirFlowsheet({ flowsheet, noun }: { flowsheet: FhirFlowsheet; n
                   onPointerEnter={() => setHoverKey(row.codeKey)}
                   onPointerLeave={() => setHoverKey(cur => (cur === row.codeKey ? null : cur))}
                 >
-                  <th scope="row" className={`${STICKY_FREEZE} ${NAME_COL} ${rowBg} py-1 pl-3 pr-2 text-left align-middle font-normal`}>
+                  <th scope="row" className={`${STICKY_FREEZE} ${NAME_COL} ${rowBg} ${rowIndent} py-1 pr-2 text-left align-middle font-normal`}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex min-w-0 items-baseline gap-2">
                         <span className="truncate text-ink" title={row.label}>{row.label}</span>

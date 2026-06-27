@@ -124,7 +124,7 @@ export function FhirChartViewer({ chart }: { chart: FhirChart }) {
         {active === 'orders' && (
           <FhirSectionList rows={chart.ordersAndProcedures} title="Orders & Procedures" emptyLabel="None recorded." spec={ORDER_COLUMNS} />
         )}
-        {active === 'labs' && <FhirFlowsheet flowsheet={chart.labs} noun="Lab result" />}
+        {active === 'labs' && <FhirFlowsheet flowsheet={chart.labs} noun="Lab result" grouping="labs" />}
         {active === 'vitals' && <FhirFlowsheet flowsheet={chart.vitals} noun="Vital" />}
         {active === 'notes' && <NotesFull notes={chart.notes} />}
         {active === 'social' && <SocialFull chart={chart} />}

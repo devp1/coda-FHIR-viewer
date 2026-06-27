@@ -146,6 +146,12 @@ mechanical (group by code, count, keep latest), not a clinical opinion about wha
 can't be placed on a card is **counted** in `chart.unmapped`. If you add a card or field, source it
 verbatim from the model; absent → em-dash, never a guess.
 
+Labs have one explicit readability carve-out: a pinned snapshot of Roger's Lab reference catalog may
+group/order lab analyte rows into category/family headers. That carve-out is display-only: it does not
+change labels, values, units, cells, derived/calculated semantics, or residual accounting, and unmapped
+labs must remain visible under "Other labs". Do not treat this as permission to add ad hoc clinical
+code lists or hand-maintained classification rules.
+
 Two corollaries that an audit found broken and `test/fhir-chart.test.ts` now guards — keep them true:
 - **A categorized lab/vital Observation with no `value[x]`** (and no valued component) surfaces no
   flowsheet cell, so it is counted in `chart.unmapped` (`Observation (laboratory|vital-signs, no value)`)

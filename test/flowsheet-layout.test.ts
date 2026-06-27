@@ -65,9 +65,9 @@ test('flowsheet column layout invariant holds across the full state space', () =
 
 test('historically-broken widths produce exact even divisors', () => {
   for (const [frame, count, wantColPx] of [
-    [1280, 40, 1024 / 12],
-    [1400, 40, 1144 / 14],
-    [1252, 20, 996 / 12],
+    [1280, 40, 960 / 12],
+    [1400, 40, 1080 / 13],
+    [1252, 20, 932 / 11],
   ] as const) {
     const L = computeColumnLayout(frame, count);
     assert.ok(!L.fill, `frame=${frame}: should be SCROLL`);

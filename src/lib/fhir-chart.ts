@@ -11,7 +11,9 @@
  *  - Nothing is INVENTED. Labels and values are carried verbatim: a label is `code.text` ?? first
  *    `coding[].display` ?? raw code; values are rendered straight from `value*` with the FHIR unit
  *    attached, never converted, never computed (no derived age/BMI/MAP, no reference ranges).
- *  - No hardcoded code lists, no clinical reclassification of what a resource "means".
+ *  - No hardcoded code lists, no clinical reclassification of what a resource "means", except the
+ *    explicit display-only lab grouping catalog. That catalog may group/order lab rows for readability,
+ *    but labels, values, units, cells, and unmapped residuals remain verbatim from FHIR.
  *  - Dedup is purely mechanical: group by clinical code, count occurrences, keep the latest instance.
  *    That is a de-duplication of restated facts, not a clinical opinion about what is "active".
  *  - Nothing is silently LOST. This is a compact SUMMARY projection — each card surfaces the
@@ -25,6 +27,7 @@
  * Pure + client-safe (no node:fs, no network) — runs entirely in the browser from dropped files.
  */
 
+import { compareFhirLabRows, resolveFhirLabGroup, type FhirLabGroup } from './fhir-lab-grouping';
 import type { FhirResource, PatientBundle } from './fhir-ingest';
 
 // ── view-model shapes ───────────────────────────────────────────────────────────────────────────
@@ -76,6 +79,8 @@ export type FhirFlowsheetRow = {
   /** Verbatim analyte label. */
   label: string;
   codeKey: string;
+  /** Display-only grouping resolved from Roger's Lab reference catalog. Present for mapped lab rows only. */
+  labGroup?: FhirLabGroup | null;
   /** Unit carried verbatim from the latest valued cell, if any. */
   unit: string | null;
   /** dateKey → cell value (string-rendered, verbatim). dateKey is the full effective timestamp. */
@@ -525,6 +530,7 @@ function hasCategory(obs: FhirResource, code: string): boolean {
 type FlowsheetAccumulator = {
   label: string;
   codeKey: string;
+  labGroup?: FhirLabGroup | null;
   unit: string | null;
   /** dateKey → cell value. dateKey is the full effective timestamp (+ a "·n" suffix on collision). */
   cells: Record<string, string>;
@@ -547,11 +553,14 @@ type FlowsheetAccumulator = {
 // PhysicianBench export confirmed `status` is `final` on 114,241/114,241 observations (an invariant in
 // this data), so a per-cell status badge would add visual noise without clinical signal. If a future
 // export carries non-final results, revisit (e.g. mark only non-final cells).
-function buildFlowsheet(observations: FhirResource[]): { flowsheet: FhirFlowsheet; skipped: number } {
+function buildFlowsheet(
+  observations: FhirResource[],
+  options: { resolveGroup?: (codeKey: string, label: string) => FhirLabGroup | null } = {},
+): { flowsheet: FhirFlowsheet; skipped: number } {
   const rows = new Map<string, FlowsheetAccumulator>();
   // Map a column key → its sort token. A collision suffix sorts immediately AFTER its base timestamp
   // (and before the next distinct timestamp) — fixing the old lexicographic "#10 before #2" bug and
-  // the "#n before next-second" bug. Token = `${base} ${paddedN}` so string compare is correct.
+  // the "#n before next-second" bug. Token = `${base}\u0000${paddedN}` so string compare is correct.
   const sortToken = new Map<string, string>();
 
   const place = (
@@ -560,10 +569,14 @@ function buildFlowsheet(observations: FhirResource[]): { flowsheet: FhirFlowshee
     rendered: { text: string; unit: string | null; numeric: number | null },
   ) => {
     const codeKey = codeKeyOf(concept);
+    const label = labelOf(concept);
+    const labGroup = options.resolveGroup?.(codeKey, label) ?? null;
     let row = rows.get(codeKey);
     if (!row) {
-      row = { label: labelOf(concept), codeKey, unit: null, cells: {}, numeric: {} };
+      row = { label, codeKey, labGroup, unit: null, cells: {}, numeric: {} };
       rows.set(codeKey, row);
+    } else if (!row.labGroup && labGroup) {
+      row.labGroup = labGroup;
     }
     // The cell shows the BARE value — the unit is shown ONCE on the left next to the analyte label, so
     // repeating it in every cell is redundant. Strip the trailing unit from this result's text; the
@@ -590,7 +603,7 @@ function buildFlowsheet(observations: FhirResource[]): { flowsheet: FhirFlowshee
     if (rendered.unit && !row.unit) row.unit = rendered.unit;
     // Sort token: base timestamp, then a NUL separator + zero-padded collision index, so "·2" sorts
     // right after the base and "·10" after "·2", all before the next distinct timestamp.
-    sortToken.set(key, `${dateKey} ${String(n).padStart(6, '0')}`);
+    sortToken.set(key, `${dateKey}\u0000${String(n).padStart(6, '0')}`);
   };
 
   let skipped = 0; // categorized observations that surfaced NO cell (no value[x], no valued component)
@@ -632,14 +645,18 @@ function buildFlowsheet(observations: FhirResource[]): { flowsheet: FhirFlowshee
   const outRows: FhirFlowsheetRow[] = Array.from(rows.values()).map(r => ({
     label: r.label,
     codeKey: r.codeKey,
+    labGroup: r.labGroup ?? null,
     unit: r.unit,
     cells: r.cells,
     numeric: dateKeys.filter(k => k in r.numeric).map(k => ({ dateKey: k, value: r.numeric[k] })),
   }));
 
-  // Analyte rows are ALPHABETICAL by label — matching the signed-chart grid's catalog ordering, which
-  // a physician scans by name, not by recency (user-confirmed).
-  outRows.sort((a, b) => a.label.localeCompare(b.label));
+  // Default: analyte rows are alphabetical by label, matching the old flat viewer.
+  //
+  // Labs carve-out: when a grouping resolver is supplied, use Roger's reference-catalog source-row order
+  // as a display-only readability layer. Values/units/labels stay verbatim and unresolved rows remain
+  // visible after the mapped catalog groups.
+  outRows.sort(options.resolveGroup ? compareFhirLabRows : (a, b) => a.label.localeCompare(b.label));
 
   return { flowsheet: { dateKeys, rows: outRows }, skipped };
 }
@@ -873,7 +890,7 @@ export function buildFhirChart(bundle: PatientBundle): FhirChart {
     o => !hasCategory(o, 'laboratory') && !hasCategory(o, 'vital-signs') && !hasCategory(o, 'social-history'),
   );
 
-  const labsBuilt = buildFlowsheet(labObs);
+  const labsBuilt = buildFlowsheet(labObs, { resolveGroup: resolveFhirLabGroup });
   const vitalsBuilt = buildFlowsheet(vitalObs);
   const labs = labsBuilt.flowsheet;
   const vitals = vitalsBuilt.flowsheet;

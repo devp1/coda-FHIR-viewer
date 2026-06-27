@@ -10,8 +10,8 @@
  * whole too. The earlier fixed-80px-floor scroll width broke this (80 ∤ 996/1024/1144 → clipped sliver).
  */
 
-/** 16rem — the frozen name column width; single source for the date equal-share calc. */
-export const NAME_COL_PX = 256;
+/** 20rem — the frozen name column width; single source for the date equal-share calc. */
+export const NAME_COL_PX = 320;
 /** Per-date-column min width (the legible floor): "MMM D 'YY" header (~60px) + px-2 padding ≈ 5rem. */
 export const DATE_COL_FLOOR_PX = 80;
 
