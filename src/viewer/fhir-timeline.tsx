@@ -35,7 +35,6 @@ type TrackBreak = { kind: 'break'; afterKey: string; beforeKey: string; skipCoun
 type TrackItem = TrackMonth | TrackBreak;
 type YearBracket = { year: string; leftX: number; rightX: number };
 type Track = { items: TrackItem[]; xByKey: Map<string, number>; yearBrackets: YearBracket[]; width: number };
-type ZoomMode = 'fit' | 'detail';
 
 const DECELERATE = 'cubic-bezier(0.05,0.7,0.1,1)';
 const MONTH_W = 60;
@@ -138,7 +137,6 @@ function TimelineSwimlanes({
   const track = useMemo(() => buildCompressedTrack(columns), [columns]);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [laneWidth, setLaneWidth] = useState(0);
-  const [zoom, setZoom] = useState<ZoomMode>('fit');
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [scrubKey, setScrubKey] = useState<string | null>(null);
   const [modalKey, setModalKey] = useState<string | null>(null);
@@ -159,7 +157,7 @@ function TimelineSwimlanes({
     return () => ro.disconnect();
   }, []);
 
-  const pack = useMemo(() => packTrack(track.width, track.xByKey.size, laneWidth || CARD_W_ESTIMATE, zoom), [track, laneWidth, zoom]);
+  const pack = useMemo(() => packTrack(track.xByKey.size, laneWidth || CARD_W_ESTIMATE), [track, laneWidth]);
 
   useLayoutEffect(() => {
     const el = trackRef.current;
@@ -284,8 +282,6 @@ function TimelineSwimlanes({
       <Readout
         column={selected}
         summary={restSummary}
-        zoom={zoom}
-        onZoom={setZoom}
         onScrubPrev={() => moveScrub(-1)}
         onScrubNext={() => moveScrub(1)}
         onExpand={selected ? () => openDate(selected.dateKey) : undefined}
@@ -358,16 +354,12 @@ function TimeAxis({ track, frac, selected, labelsFit }: { track: Track; frac: (x
 function Readout({
   column,
   summary,
-  zoom,
-  onZoom,
   onScrubPrev,
   onScrubNext,
   onExpand,
 }: {
   column: FhirTimelineColumn | null;
   summary: { datedCount: number; entryTotal: number; tally: Array<{ family: FhirTimelineFamily; count: number }> };
-  zoom: ZoomMode;
-  onZoom: (z: ZoomMode) => void;
   onScrubPrev: () => void;
   onScrubNext: () => void;
   onExpand?: () => void;
@@ -377,18 +369,6 @@ function Readout({
       <div className="flex items-center gap-1">
         <button type="button" onClick={onScrubPrev} className="mono rounded-sm border border-hairline bg-surface px-1.5 py-0.5 text-[0.58rem] text-ink-mid hover:border-ok hover:text-ok" aria-label="Scrub to older month">‹</button>
         <button type="button" onClick={onScrubNext} className="mono rounded-sm border border-hairline bg-surface px-1.5 py-0.5 text-[0.58rem] text-ink-mid hover:border-ok hover:text-ok" aria-label="Scrub to newer month">›</button>
-        <div className="ml-auto inline-flex rounded-sm border border-hairline bg-surface p-0.5">
-          {(['fit', 'detail'] as ZoomMode[]).map(mode => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => onZoom(mode)}
-              className={`mono rounded-[5px] px-2 py-0.5 text-[0.52rem] uppercase tracking-wider ${zoom === mode ? 'bg-ok-soft text-ok' : 'text-ink-light hover:text-ink'}`}
-            >
-              {mode}
-            </button>
-          ))}
-        </div>
       </div>
       {column ? (
         <>
@@ -714,11 +694,7 @@ function buildCompressedTrack(columns: FhirTimelineColumn[]): Track {
   return { items, xByKey, yearBrackets: buildYearBrackets(items), width: Math.max(cursor, 1) };
 }
 
-function packTrack(naturalWidth: number, dotCount: number, cardWidth: number, zoom: ZoomMode): { scroll: boolean; scrollWidth: number; labelsFit: boolean } {
-  if (zoom === 'detail') {
-    const scrollWidth = Math.max(cardWidth, naturalWidth, dotCount * MIN_LABEL_PITCH);
-    return { scroll: scrollWidth > cardWidth, scrollWidth, labelsFit: true };
-  }
+function packTrack(dotCount: number, cardWidth: number): { scroll: boolean; scrollWidth: number; labelsFit: boolean } {
   const floorWidth = Math.max(dotCount, 1) * MIN_DOT_PITCH;
   const scroll = floorWidth > cardWidth;
   const renderedWidth = scroll ? floorWidth : cardWidth;
