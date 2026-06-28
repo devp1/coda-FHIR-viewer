@@ -2,6 +2,7 @@ import assert from 'node:assert';
 import { test } from 'node:test';
 import {
   formatFlowsheetDateTimeLabel,
+  formatFlowsheetDateTimeTooltipLabel,
   formatFlowsheetTimeLabel,
 } from '../src/viewer/fhir-flowsheet.tsx';
 
@@ -26,5 +27,16 @@ test('flowsheet date-time labels keep date-only columns compact and expose colli
   assert.equal(
     formatFlowsheetDateTimeLabel('2024-01-02T08:00:00Z·2'),
     'Jan 2 ’24 08:00 UTC ·2 (2024-01-02T08:00:00Z·2)',
+  );
+});
+
+test('flowsheet header tooltip labels preserve source offsets behind daylight labels', () => {
+  assert.equal(formatFlowsheetDateTimeTooltipLabel('2024-01-02T08:00:00-04:00'), 'Jan 2 ’24 08:00 EDT (source UTC-04:00)');
+  assert.equal(formatFlowsheetDateTimeTooltipLabel('2024-01-02T08:00:00-0400'), 'Jan 2 ’24 08:00 EDT (source UTC-04:00)');
+  assert.equal(formatFlowsheetDateTimeTooltipLabel('2024-01-02T08:00:00Z'), 'Jan 2 ’24 08:00 UTC');
+  assert.equal(formatFlowsheetDateTimeTooltipLabel('2024-01-02T08:00:00+05:30'), 'Jan 2 ’24 08:00 UTC+05:30');
+  assert.equal(
+    formatFlowsheetDateTimeTooltipLabel('2024-01-02T08:00:00-04:00·2'),
+    'Jan 2 ’24 08:00 EDT ·2 (source UTC-04:00) (2024-01-02T08:00:00-04:00·2)',
   );
 });

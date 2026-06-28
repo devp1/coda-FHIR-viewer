@@ -318,7 +318,7 @@ export function FhirFlowsheet({
               </th>
               {visibleDates.map(dateKey => {
                 const focused = focusMonth && dateKey.slice(0, 7) === focusMonth;
-                const dateTimeLabel = formatFlowsheetDateTimeLabel(dateKey);
+                const dateTimeLabel = formatFlowsheetDateTimeTooltipLabel(dateKey);
                 const timeLabel = formatFlowsheetTimeLabel(dateKey);
                 return (
                 <th
@@ -502,7 +502,7 @@ function shortDate(dateKey: string): string {
 
 /** Source-local HH:MM from a FHIR instant/dateTime key; no timezone conversion. */
 export function formatFlowsheetTimeLabel(dateKey: string): string | null {
-  const match = /T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/.exec(baseDateKey(dateKey));
+  const match = timeMatch(dateKey);
   if (!match) return null;
   const seconds = match[3] && match[3] !== '00' ? `:${match[3]}` : '';
   const zone = formatSourceTimezoneLabel(match[4]);
@@ -510,10 +510,24 @@ export function formatFlowsheetTimeLabel(dateKey: string): string | null {
   return `${match[1]}:${match[2]}${seconds}${zone}${suffix ? ` ${suffix}` : ''}`;
 }
 
+function timeMatch(dateKey: string): RegExpExecArray | null {
+  return /T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/.exec(baseDateKey(dateKey));
+}
+
 function formatSourceTimezoneLabel(offset: string | undefined): string {
   if (!offset) return '';
   if (offset === 'Z') return ' UTC';
-  const normalized = offset.length === 5 ? `${offset.slice(0, 3)}:${offset.slice(3)}` : offset;
+  const normalized = normalizeUtcOffset(offset);
+  const daylightLabel = usDaylightLabelForOffset(normalized);
+  if (daylightLabel) return ` ${daylightLabel}`;
+  return ` UTC${normalized}`;
+}
+
+function normalizeUtcOffset(offset: string): string {
+  return offset.length === 5 ? `${offset.slice(0, 3)}:${offset.slice(3)}` : offset;
+}
+
+function usDaylightLabelForOffset(normalizedOffset: string): string | null {
   const usDaylightLabel: Record<string, string> = {
     '-04:00': 'EDT',
     '-05:00': 'CDT',
@@ -522,15 +536,28 @@ function formatSourceTimezoneLabel(offset: string | undefined): string {
     '-08:00': 'AKDT',
     '-09:00': 'HDT',
   };
-  const daylightLabel = usDaylightLabel[normalized];
-  if (daylightLabel) return ` ${daylightLabel}`;
-  return ` UTC${normalized}`;
+  return usDaylightLabel[normalizedOffset] ?? null;
 }
 
 export function formatFlowsheetDateTimeLabel(dateKey: string): string {
   const time = formatFlowsheetTimeLabel(dateKey);
   const label = time ? `${shortDate(dateKey)} ${time}` : shortDate(dateKey);
   return baseDateKey(dateKey) === dateKey ? label : `${label} (${dateKey})`;
+}
+
+export function formatFlowsheetDateTimeTooltipLabel(dateKey: string): string {
+  const time = formatFlowsheetTimeLabel(dateKey);
+  const label = time ? `${shortDate(dateKey)} ${time}` : shortDate(dateKey);
+  const match = timeMatch(dateKey);
+  const source = sourceUtcOffsetDetail(match?.[4]);
+  const sourceDetail = source ? ` (source ${source})` : '';
+  return baseDateKey(dateKey) === dateKey ? `${label}${sourceDetail}` : `${label}${sourceDetail} (${dateKey})`;
+}
+
+function sourceUtcOffsetDetail(offset: string | undefined): string | null {
+  if (!offset || offset === 'Z') return null;
+  const normalized = normalizeUtcOffset(offset);
+  return usDaylightLabelForOffset(normalized) ? `UTC${normalized}` : null;
 }
 
 /**
