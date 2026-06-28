@@ -329,7 +329,7 @@ export function FhirFlowsheet({
                 >
                   <span className="mono flex min-h-7 flex-col items-center justify-center leading-tight text-ink-mid">
                     <span className="whitespace-nowrap text-[0.62rem]">{shortDate(dateKey)}</span>
-                    {timeLabel && <span className="mt-0.5 whitespace-nowrap text-[0.56rem] text-ink-faint">{timeLabel}</span>}
+                    {timeLabel && <span className="mt-0.5 whitespace-nowrap text-[0.52rem] text-ink-faint/80">{timeLabel}</span>}
                   </span>
                 </th>
                 );
