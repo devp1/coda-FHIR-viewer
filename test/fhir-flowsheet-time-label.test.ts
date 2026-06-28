@@ -5,11 +5,16 @@ import {
   formatFlowsheetTimeLabel,
 } from '../src/viewer/fhir-flowsheet.tsx';
 
-test('flowsheet time labels include the source timezone when the timestamp provides one', () => {
+test('flowsheet time labels normalize US offsets to daylight-time labels', () => {
   assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00Z'), '08:00 UTC');
-  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-04:00'), '08:00 UTC-04:00');
+  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-04:00'), '08:00 EDT');
+  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-05:00'), '08:00 CDT');
+  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-06:00'), '08:00 MDT');
+  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-07:00'), '08:00 PDT');
+  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-08:00'), '08:00 AKDT');
+  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-09:00'), '08:00 HDT');
   assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:30+05:30'), '08:00:30 UTC+05:30');
-  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-0400'), '08:00 UTC-04:00');
+  assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00-0400'), '08:00 EDT');
   assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00'), '08:00');
   assert.equal(formatFlowsheetTimeLabel('2024-01-02'), null);
   assert.equal(formatFlowsheetTimeLabel('2024-01-02T08:00:00Z·2'), '08:00 UTC ·2');
