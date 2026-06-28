@@ -505,9 +505,16 @@ export function formatFlowsheetTimeLabel(dateKey: string): string | null {
   const match = /T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/.exec(baseDateKey(dateKey));
   if (!match) return null;
   const seconds = match[3] && match[3] !== '00' ? `:${match[3]}` : '';
-  const zone = match[4] ? ` ${match[4]}` : '';
+  const zone = formatUtcOffsetLabel(match[4]);
   const suffix = /·\d+$/.exec(dateKey)?.[0] ?? '';
   return `${match[1]}:${match[2]}${seconds}${zone}${suffix ? ` ${suffix}` : ''}`;
+}
+
+function formatUtcOffsetLabel(offset: string | undefined): string {
+  if (!offset) return '';
+  if (offset === 'Z') return ' UTC';
+  const normalized = offset.length === 5 ? `${offset.slice(0, 3)}:${offset.slice(3)}` : offset;
+  return ` UTC${normalized}`;
 }
 
 export function formatFlowsheetDateTimeLabel(dateKey: string): string {
