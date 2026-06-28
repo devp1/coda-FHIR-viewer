@@ -35,6 +35,24 @@ test('reviewed display aliases avoid known fuzzy-mapping traps', () => {
   assert.equal(eosPercent?.sourceRow, 16);
 });
 
+test('resolves reviewed lipid-panel LOINCs without fuzzy lipid matching', () => {
+  const directLdl = resolveFhirLabGroup(
+    'http://loinc.org|2089-1',
+    'Cholesterol in LDL [Mass/volume] in Serum or Plasma by Direct assay',
+  );
+  assert.equal(directLdl?.categoryLabel, 'Cardiac Tests');
+  assert.equal(directLdl?.familyLabel, 'Lipid Panel');
+  assert.equal(directLdl?.entryLabel, 'Low Density Lipoprotein');
+  assert.equal(directLdl?.sourceRow, 82);
+  assert.equal(directLdl?.match, 'loinc');
+
+  const catalogLdl = resolveFhirLabGroup('http://loinc.org|13457-7', 'LDL');
+  assert.equal(catalogLdl?.sourceRow, 82);
+
+  assert.equal(resolveFhirLabGroup('http://loinc.org|9830-1', 'Cholesterol/HDL Ratio'), null);
+  assert.equal(resolveFhirLabGroup('http://loinc.org|44717-7', 'LDL/HDL Ratio'), null);
+});
+
 test('unreviewed labels remain unmapped instead of being fuzzily classified', () => {
   assert.equal(resolveFhirLabGroup('text|poct-comment', 'POCT Comment'), null);
   assert.equal(resolveFhirLabGroup('text|globulin', 'Globulin'), null);

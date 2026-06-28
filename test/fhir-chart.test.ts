@@ -104,17 +104,26 @@ test('lab flowsheet maps catalog groups, orders mapped rows by source catalog, a
   const chart = buildFhirChart(
     bundleOf(
       codedLab('calcium', '17861-6', 'Calcium, Ser/Plas'),
+      codedLab('ldl', '2089-1', 'Cholesterol in LDL [Mass/volume] in Serum or Plasma by Direct assay'),
       { resourceType: 'Observation', id: 'poct', category: labCategory, code: { text: 'POCT Comment' }, effectiveDateTime: '2025-01-01', valueString: 'Comment' },
       codedLab('hgb', '718-7', 'Hemoglobin'),
     ),
   );
 
-  assert.deepEqual(chart.labs.rows.map(r => r.label), ['Hemoglobin', 'Calcium, Ser/Plas', 'POCT Comment']);
+  assert.deepEqual(chart.labs.rows.map(r => r.label), [
+    'Hemoglobin',
+    'Calcium, Ser/Plas',
+    'Cholesterol in LDL [Mass/volume] in Serum or Plasma by Direct assay',
+    'POCT Comment',
+  ]);
   assert.equal(chart.labs.rows[0].labGroup?.categoryLabel, 'Hematology');
   assert.equal(chart.labs.rows[0].labGroup?.familyLabel, 'Complete Blood Count (CBC)');
   assert.equal(chart.labs.rows[1].labGroup?.categoryLabel, 'Chemistries');
   assert.equal(chart.labs.rows[1].labGroup?.familyLabel, 'Basic Metabolic Panel (BMP)');
-  assert.equal(chart.labs.rows[2].labGroup, null);
+  assert.equal(chart.labs.rows[2].labGroup?.categoryLabel, 'Cardiac Tests');
+  assert.equal(chart.labs.rows[2].labGroup?.familyLabel, 'Lipid Panel');
+  assert.equal(chart.labs.rows[2].labGroup?.entryLabel, 'Low Density Lipoprotein');
+  assert.equal(chart.labs.rows[3].labGroup, null);
 });
 
 test('lab flowsheet keeps same-calendar-date different-time observations as separate columns', () => {

@@ -12,6 +12,7 @@ test('builds full lab hierarchy with Other labs last', () => {
   const rows = [
     row('Hemoglobin', 'http://loinc.org|718-7'),
     row('Calcium, Ser/Plas', 'http://loinc.org|17861-6'),
+    row('Cholesterol in LDL [Mass/volume] in Serum or Plasma by Direct assay', 'http://loinc.org|2089-1'),
     row('POCT Comment', 'text|poct-comment', null),
   ];
 
@@ -25,6 +26,9 @@ test('builds full lab hierarchy with Other labs last', () => {
       'category:Chemistries',
       'family:Basic Metabolic Panel (BMP)',
       'data:Calcium, Ser/Plas',
+      'category:Cardiac Tests',
+      'family:Lipid Panel',
+      'data:Cholesterol in LDL [Mass/volume] in Serum or Plasma by Direct assay',
       'category:Other labs',
       'data:POCT Comment',
     ],
