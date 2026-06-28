@@ -33,6 +33,10 @@ function dayOf(dateKey: string): string {
   return dateKey.startsWith('undated') ? '' : dateKey.slice(0, 10);
 }
 
+function baseDateKey(dateKey: string): string {
+  return dateKey.replace(/·\d+$/, '');
+}
+
 function endOfMonth(monthKey: string): string {
   const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
   if (!match) return monthKey;
@@ -314,9 +318,19 @@ export function FhirFlowsheet({
               </th>
               {visibleDates.map(dateKey => {
                 const focused = focusMonth && dateKey.slice(0, 7) === focusMonth;
+                const dateTimeLabel = formatFlowsheetDateTimeLabel(dateKey);
+                const timeLabel = formatFlowsheetTimeLabel(dateKey);
                 return (
-                <th key={dateKey} className={`border-l border-hairline px-2 py-1.5 text-center align-bottom font-normal ${focused ? 'bg-ok-soft text-ok shadow-[inset_0_-2px_0_#1a6b4a]' : 'bg-surface-dim'}`}>
-                  <span className="mono whitespace-nowrap text-[0.62rem] text-ink-mid">{shortDate(dateKey)}</span>
+                <th
+                  key={dateKey}
+                  title={dateTimeLabel}
+                  aria-label={dateTimeLabel}
+                  className={`border-l border-hairline px-2 py-1 text-center align-bottom font-normal ${focused ? 'bg-ok-soft text-ok shadow-[inset_0_-2px_0_#1a6b4a]' : 'bg-surface-dim'}`}
+                >
+                  <span className="mono flex min-h-7 flex-col items-center justify-center leading-tight text-ink-mid">
+                    <span className="whitespace-nowrap text-[0.62rem]">{shortDate(dateKey)}</span>
+                    {timeLabel && <span className="mt-0.5 whitespace-nowrap text-[0.56rem] text-ink-faint">{timeLabel}</span>}
+                  </span>
                 </th>
                 );
               })}
@@ -478,12 +492,28 @@ export function FhirFlowsheet({
 
 /** Compact date header: "MMM D 'YY" (no "Drawn" prefix). */
 function shortDate(dateKey: string): string {
-  const day = dayOf(dateKey);
+  const day = dayOf(baseDateKey(dateKey));
   if (!day) return '—';
   const d = new Date(`${day}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return day;
   const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
   return `${mon} ${d.getUTCDate()} ’${String(d.getUTCFullYear()).slice(2)}`;
+}
+
+/** Source-local HH:MM from a FHIR instant/dateTime key; no timezone conversion. */
+export function formatFlowsheetTimeLabel(dateKey: string): string | null {
+  const match = /T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/.exec(baseDateKey(dateKey));
+  if (!match) return null;
+  const seconds = match[3] && match[3] !== '00' ? `:${match[3]}` : '';
+  const zone = match[4] ? ` ${match[4]}` : '';
+  const suffix = /·\d+$/.exec(dateKey)?.[0] ?? '';
+  return `${match[1]}:${match[2]}${seconds}${zone}${suffix ? ` ${suffix}` : ''}`;
+}
+
+export function formatFlowsheetDateTimeLabel(dateKey: string): string {
+  const time = formatFlowsheetTimeLabel(dateKey);
+  const label = time ? `${shortDate(dateKey)} ${time}` : shortDate(dateKey);
+  return baseDateKey(dateKey) === dateKey ? label : `${label} (${dateKey})`;
 }
 
 /**
@@ -498,8 +528,8 @@ function buildCellDetail(row: FhirFlowsheetRow, dateKey: string, cellText: strin
   if (numeric !== null) {
     for (let i = row.numeric.length - 1; i >= 0; i--) {
       const n = row.numeric[i];
-      if (n.dateKey < dateKey && n.value !== null) { prior = { value: n.value, dateLabel: shortDate(n.dateKey) }; break; }
+      if (n.dateKey < dateKey && n.value !== null) { prior = { value: n.value, dateLabel: formatFlowsheetDateTimeLabel(n.dateKey) }; break; }
     }
   }
-  return { rowLabel: row.label, unit: row.unit, dateLabel: shortDate(dateKey), display: cellText, value: numeric, prior };
+  return { rowLabel: row.label, unit: row.unit, dateLabel: formatFlowsheetDateTimeLabel(dateKey), display: cellText, value: numeric, prior };
 }

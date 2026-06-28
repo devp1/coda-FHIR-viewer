@@ -27,6 +27,9 @@ const bundleOf = (...resources: object[]): PatientBundle => ({
 const labCategory = [
   { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'laboratory' }] },
 ];
+const vitalCategory = [
+  { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'vital-signs' }] },
+];
 
 test('value-less categorized Observation is counted in unmapped, not silently dropped', () => {
   const chart = buildFhirChart(
@@ -43,9 +46,6 @@ test('value-less categorized Observation is counted in unmapped, not silently dr
 });
 
 test('value-less vital-sign Observation is counted under its own residual label', () => {
-  const vitalCategory = [
-    { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'vital-signs' }] },
-  ];
   const chart = buildFhirChart(
     bundleOf({ resourceType: 'Observation', id: 'v1', category: vitalCategory, code: { text: 'Heart rate' }, effectiveDateTime: '2025-01-01' }),
   );
@@ -115,6 +115,95 @@ test('lab flowsheet maps catalog groups, orders mapped rows by source catalog, a
   assert.equal(chart.labs.rows[1].labGroup?.categoryLabel, 'Chemistries');
   assert.equal(chart.labs.rows[1].labGroup?.familyLabel, 'Basic Metabolic Panel (BMP)');
   assert.equal(chart.labs.rows[2].labGroup, null);
+});
+
+test('lab flowsheet keeps same-calendar-date different-time observations as separate columns', () => {
+  const chart = buildFhirChart(
+    bundleOf(
+      { resourceType: 'Observation', id: 'na-am', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-02T08:00:00Z', valueQuantity: { value: 139, unit: 'mmol/L' } },
+      { resourceType: 'Observation', id: 'na-pm', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-02T16:00:00Z', valueQuantity: { value: 141, unit: 'mmol/L' } },
+    ),
+  );
+  const row = chart.labs.rows.find(r => r.label === 'Sodium')!;
+
+  assert.deepEqual(chart.labs.dateKeys, ['2024-01-02T08:00:00Z', '2024-01-02T16:00:00Z']);
+  assert.deepEqual(row.cells, {
+    '2024-01-02T08:00:00Z': '139',
+    '2024-01-02T16:00:00Z': '141',
+  });
+  assert.deepEqual(row.numeric, [
+    { dateKey: '2024-01-02T08:00:00Z', value: 139 },
+    { dateKey: '2024-01-02T16:00:00Z', value: 141 },
+  ]);
+  assert.equal(chart.labs.events.length, 2);
+});
+
+test('vital flowsheet keeps same-calendar-date different-time observations as separate columns', () => {
+  const chart = buildFhirChart(
+    bundleOf(
+      { resourceType: 'Observation', id: 'hr-am', category: vitalCategory, code: { text: 'Heart rate' }, effectiveDateTime: '2024-01-02T08:00:00Z', valueQuantity: { value: 68, unit: '/min' } },
+      { resourceType: 'Observation', id: 'hr-pm', category: vitalCategory, code: { text: 'Heart rate' }, effectiveDateTime: '2024-01-02T20:00:00Z', valueQuantity: { value: 74, unit: '/min' } },
+    ),
+  );
+  const row = chart.vitals.rows.find(r => r.label === 'Heart rate')!;
+
+  assert.deepEqual(chart.vitals.dateKeys, ['2024-01-02T08:00:00Z', '2024-01-02T20:00:00Z']);
+  assert.deepEqual(row.cells, {
+    '2024-01-02T08:00:00Z': '68',
+    '2024-01-02T20:00:00Z': '74',
+  });
+  assert.deepEqual(row.numeric, [
+    { dateKey: '2024-01-02T08:00:00Z', value: 68 },
+    { dateKey: '2024-01-02T20:00:00Z', value: 74 },
+  ]);
+  assert.equal(chart.vitals.events.length, 2);
+});
+
+test('same-day intraday observations sort chronologically across days', () => {
+  const chart = buildFhirChart(
+    bundleOf(
+      { resourceType: 'Observation', id: 'late', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-01T23:00:00Z', valueQuantity: { value: 138, unit: 'mmol/L' } },
+      { resourceType: 'Observation', id: 'am', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-02T08:00:00Z', valueQuantity: { value: 139, unit: 'mmol/L' } },
+      { resourceType: 'Observation', id: 'pm', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-02T16:00:00Z', valueQuantity: { value: 141, unit: 'mmol/L' } },
+    ),
+  );
+
+  assert.deepEqual(chart.labs.dateKeys, [
+    '2024-01-01T23:00:00Z',
+    '2024-01-02T08:00:00Z',
+    '2024-01-02T16:00:00Z',
+  ]);
+});
+
+test('exact same timestamp with different values gets a collision-suffixed second column', () => {
+  const chart = buildFhirChart(
+    bundleOf(
+      { resourceType: 'Observation', id: 'na-a', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-02T08:00:00Z', valueQuantity: { value: 139, unit: 'mmol/L' } },
+      { resourceType: 'Observation', id: 'na-b', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-02T08:00:00Z', valueQuantity: { value: 141, unit: 'mmol/L' } },
+    ),
+  );
+  const row = chart.labs.rows.find(r => r.label === 'Sodium')!;
+
+  assert.deepEqual(chart.labs.dateKeys, ['2024-01-02T08:00:00Z', '2024-01-02T08:00:00Z·2']);
+  assert.deepEqual(row.cells, {
+    '2024-01-02T08:00:00Z': '139',
+    '2024-01-02T08:00:00Z·2': '141',
+  });
+  assert.equal(chart.labs.events.length, 2);
+});
+
+test('exact same timestamp with identical value collapses the cell but retains both events', () => {
+  const chart = buildFhirChart(
+    bundleOf(
+      { resourceType: 'Observation', id: 'na-a', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-02T08:00:00Z', valueQuantity: { value: 139, unit: 'mmol/L' } },
+      { resourceType: 'Observation', id: 'na-b', category: labCategory, code: { text: 'Sodium' }, effectiveDateTime: '2024-01-02T08:00:00Z', valueQuantity: { value: 139, unit: 'mmol/L' } },
+    ),
+  );
+  const row = chart.labs.rows.find(r => r.label === 'Sodium')!;
+
+  assert.deepEqual(chart.labs.dateKeys, ['2024-01-02T08:00:00Z']);
+  assert.deepEqual(row.cells, { '2024-01-02T08:00:00Z': '139' });
+  assert.equal(chart.labs.events.length, 2);
 });
 
 test('the Patient subject is not counted as an unmapped resource', () => {
