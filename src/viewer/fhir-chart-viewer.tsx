@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import type { FhirChart, FhirListRow, FhirNote, FhirSocialLine } from '../lib/fhir-chart';
 import { buildFhirTimelineEntries, firstNoteLine, noteSummaryLine, type FhirTimelineFamily } from '../lib/fhir-timeline';
 import { FhirCard, FhirListGroup, FhirListItem } from './fhir-card';
+import { getDashboardChartSections, getVisibleChartSections, type ChartSectionKey, type SectionKey } from './fhir-chart-sections';
 import { ClinicalTable, type ColumnDef, type SortState } from './fhir-clinical-table';
 import { FhirFlowsheet } from './fhir-flowsheet';
 import { CountChip, DateStamp } from './fhir-primitives';
@@ -25,7 +26,6 @@ import { FhirTimeline } from './fhir-timeline';
  * Self-contained — no `clinical-entry`/`cases` imports.
  */
 
-type SectionKey = 'dashboard' | 'allergies' | 'problems' | 'medications' | 'labs' | 'vitals' | 'orders' | 'notes' | 'social';
 type TimelineFocusRequest = { dateKey: string; token: number };
 
 /**
@@ -56,19 +56,7 @@ function IdentityField({ label, value }: { label?: string; value: string }) {
 export function FhirChartViewer({ chart }: { chart: FhirChart }) {
   const { header } = chart;
 
-  // Only offer sections that have content (OpenEMR hides empty cards/sections).
-  const sections = useMemo(() => {
-    const s: { key: SectionKey; label: string; count: number }[] = [{ key: 'dashboard', label: 'Dashboard', count: 0 }];
-    if (chart.allergies.length) s.push({ key: 'allergies', label: 'Allergies', count: chart.allergies.length });
-    if (chart.problems.length) s.push({ key: 'problems', label: 'Problems', count: chart.problems.length });
-    if (chart.medications.length) s.push({ key: 'medications', label: 'Medications', count: chart.medications.length });
-    if (chart.labs.rows.length) s.push({ key: 'labs', label: 'Labs', count: chart.labs.rows.length });
-    if (chart.vitals.rows.length) s.push({ key: 'vitals', label: 'Vitals', count: chart.vitals.rows.length });
-    if (chart.ordersAndProcedures.length) s.push({ key: 'orders', label: 'Orders & Procedures', count: chart.ordersAndProcedures.length });
-    if (chart.notes.length) s.push({ key: 'notes', label: 'Notes', count: chart.notes.length });
-    if (chart.social.length) s.push({ key: 'social', label: 'Social', count: chart.social.length });
-    return s;
-  }, [chart]);
+  const sections = useMemo(() => getVisibleChartSections(chart), [chart]);
 
   const [active, setActive] = useState<SectionKey>('dashboard');
   const [timelineFocus, setTimelineFocus] = useState<TimelineFocusRequest | null>(null);
@@ -132,7 +120,7 @@ export function FhirChartViewer({ chart }: { chart: FhirChart }) {
       <div className="p-3">
         {active === 'dashboard' && <Dashboard chart={chart} onOpenSection={setActive} />}
         {active === 'allergies' && (
-          <FhirSectionList rows={chart.allergies} title="Allergies" emptyLabel="No allergies recorded." spec={ALLERGY_COLUMNS} focusDateKey={focusDateKey} focusToken={focusToken} />
+          <FhirSectionList rows={chart.allergies} title="Allergies" emptyLabel="No AllergyIntolerance resources in this export." spec={ALLERGY_COLUMNS} focusDateKey={focusDateKey} focusToken={focusToken} />
         )}
         {active === 'problems' && (
           <FhirSectionList rows={chart.problems} title="Problems" emptyLabel="No problems recorded." spec={PROBLEM_COLUMNS} focusDateKey={focusDateKey} focusToken={focusToken} />
@@ -177,51 +165,14 @@ function Dashboard({ chart, onOpenSection }: { chart: FhirChart; onOpenSection: 
   // they flow and PACK to fill the columns, so an absent card (e.g. no Allergies) never leaves a dead
   // column and a short card never leaves a tall void beneath it. We reproduce that masonry with pure
   // CSS multi-column (no JS): every card is `break-inside-avoid` and the column count is responsive.
-  // Order is the clinical reading order; columns fill top-to-bottom then left-to-right (OpenEMR's
-  // masonry reads the same way). Only non-empty cards are emitted, so there are no holes to fill.
-  const cards: ReactNode[] = [];
-  if (chart.allergies.length > 0)
-    cards.push(
-      <FhirCard key="allergies" title="Allergies" count={chart.allergies.length}>
-        <SummaryList rows={chart.allergies} limit={8} emphasisSevere onMore={() => onOpenSection('allergies')} />
-      </FhirCard>,
-    );
-  if (chart.problems.length > 0)
-    cards.push(
-      <FhirCard key="problems" title="Problems" count={chart.problems.length}>
-        <SummaryList rows={chart.problems} limit={8} onMore={() => onOpenSection('problems')} />
-      </FhirCard>,
-    );
-  if (chart.medications.length > 0)
-    cards.push(
-      <FhirCard key="medications" title="Medications" count={chart.medications.length}>
-        <SummaryList rows={chart.medications} limit={8} onMore={() => onOpenSection('medications')} />
-      </FhirCard>,
-    );
-  if (chart.ordersAndProcedures.length > 0)
-    cards.push(
-      <FhirCard key="orders" title="Orders & Procedures" count={chart.ordersAndProcedures.length}>
-        <SummaryList rows={chart.ordersAndProcedures} limit={8} onMore={() => onOpenSection('orders')} />
-      </FhirCard>,
-    );
-  if (chart.labs.rows.length > 0)
-    cards.push(
-      <FhirCard key="labs" title="Labs" count={chart.labs.rows.length}>
-        <OpenSectionLink label="Open flowsheet →" onClick={() => onOpenSection('labs')} />
-      </FhirCard>,
-    );
-  if (chart.vitals.rows.length > 0)
-    cards.push(
-      <FhirCard key="vitals" title="Vitals" count={chart.vitals.rows.length}>
-        <OpenSectionLink label="Open flowsheet →" onClick={() => onOpenSection('vitals')} />
-      </FhirCard>,
-    );
-  if (chart.notes.length > 0)
-    cards.push(
-      <FhirCard key="notes" title="Notes" count={chart.notes.length}>
-        <NoteSummaryList notes={chart.notes} limit={6} onMore={() => onOpenSection('notes')} />
-      </FhirCard>,
-    );
+  // Order is the registry's clinical reading order; columns fill top-to-bottom then left-to-right
+  // (OpenEMR's masonry reads the same way). Most cards remain content-gated, but safety-critical
+  // Allergies is registry-marked as always visible so absence is explicit without implying NKDA.
+  const cards = getDashboardChartSections(chart).map(section => (
+    <FhirCard key={section.key} title={section.label} count={section.count(chart)}>
+      <DashboardSectionBody section={section.key} chart={chart} emptyLabel={section.emptyLabel} onOpenSection={onOpenSection} />
+    </FhirCard>
+  ));
 
   // Masonry via CSS columns: 1 col (narrow) → 2 (md) → 3 (xl). `gap-3` between columns; each card gets
   // `mb-3` for the vertical gap and `break-inside-avoid` so a card never splits across a column break.
@@ -230,6 +181,33 @@ function Dashboard({ chart, onOpenSection }: { chart: FhirChart; onOpenSection: 
       {cards}
     </div>
   );
+}
+
+function DashboardSectionBody({
+  section,
+  chart,
+  emptyLabel,
+  onOpenSection,
+}: {
+  section: ChartSectionKey;
+  chart: FhirChart;
+  emptyLabel: string;
+  onOpenSection: (k: SectionKey) => void;
+}) {
+  if (section === 'allergies') {
+    return chart.allergies.length > 0 ? <SummaryList rows={chart.allergies} limit={8} emphasisSevere onMore={() => onOpenSection('allergies')} /> : <EmptySummary label={emptyLabel} />;
+  }
+  if (section === 'problems') return <SummaryList rows={chart.problems} limit={8} onMore={() => onOpenSection('problems')} />;
+  if (section === 'medications') return <SummaryList rows={chart.medications} limit={8} onMore={() => onOpenSection('medications')} />;
+  if (section === 'orders') return <SummaryList rows={chart.ordersAndProcedures} limit={8} onMore={() => onOpenSection('orders')} />;
+  if (section === 'labs') return <OpenSectionLink label="Open flowsheet →" onClick={() => onOpenSection('labs')} />;
+  if (section === 'vitals') return <OpenSectionLink label="Open flowsheet →" onClick={() => onOpenSection('vitals')} />;
+  if (section === 'notes') return <NoteSummaryList notes={chart.notes} limit={6} onMore={() => onOpenSection('notes')} />;
+  return null;
+}
+
+function EmptySummary({ label }: { label: string }) {
+  return <div className="px-1 py-2 text-[0.74rem] leading-snug text-ink-faint">{label}</div>;
 }
 
 function NoteSummaryList({ notes, limit, onMore }: { notes: FhirNote[]; limit: number; onMore: () => void }) {
